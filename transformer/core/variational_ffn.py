@@ -43,6 +43,7 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 
 from transformer.core.gauge_utils import stable_matrix_exp_pair
+from transformer.core.sanitization import san
 
 # Import attention computation for dynamic β
 from transformer.core.attention import compute_attention_weights, compute_transport_operators
@@ -330,8 +331,9 @@ def _compute_vfe_gradients_block_diagonal(
 
             try:
                 L_j = torch.linalg.cholesky(sigma_j_reg)
-                logdet_j = 2.0 * torch.sum(torch.log(torch.diagonal(L_j, dim1=-2, dim2=-1) + eps), dim=-1)
+                logdet_j = 2.0 * torch.sum(torch.log(torch.diagonal(L_j, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)
             except (torch.linalg.LinAlgError, RuntimeError):
+                san.record('cholesky_fallback')
                 try:
                     sign_j, logdet_j = torch.linalg.slogdet(sigma_j_reg)
                     logdet_j = torch.where(sign_j > 0, logdet_j, torch.zeros_like(logdet_j))
@@ -341,8 +343,9 @@ def _compute_vfe_gradients_block_diagonal(
             sigma_i_block_diag = sigma_i_block_slice + eps * I_d  # (B, C, d, d)
             try:
                 L_i = torch.linalg.cholesky(sigma_i_block_diag)
-                logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)
+                logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)
             except (torch.linalg.LinAlgError, RuntimeError):
+                san.record('cholesky_fallback')
                 try:
                     sign_i, logdet_i = torch.linalg.slogdet(sigma_i_block_diag)
                     logdet_i = torch.where(sign_i > 0, logdet_i, torch.zeros_like(logdet_i))
@@ -350,9 +353,7 @@ def _compute_vfe_gradients_block_diagonal(
                     logdet_i = torch.zeros(sigma_i_block_diag.shape[:-2], device=device, dtype=dtype)
 
             kl_block = 0.5 * (trace_block + mahal_block - d + logdet_j - logdet_i[:, :, None])
-            # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-            kl_ceil = max(100.0, 5.0 * K)
-            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=kl_ceil)
+            kl_values[:, i_start:i_end, :] = kl_values[:, i_start:i_end, :] + kl_block.clamp(min=0.0, max=100.0)
 
             # Sigma alignment gradient for this block
             if compute_sigma_align_grad:
@@ -523,14 +524,14 @@ def _compute_vfe_gradients_chunked(
 
             try:
                 L_p = torch.linalg.cholesky(sigma_j_reg)
-                logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1)
+                logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)
             except (torch.linalg.LinAlgError, RuntimeError):
+                san.record('cholesky_fallback')
                 logdet_p = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
 
             logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
 
-            kl_ceil = max(100.0, 5.0 * K)
-            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=kl_ceil)
+            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=100.0)
 
             # Store for pass 2
             chunk_data.append((beta_chunk, grad_kl, kl_chunk))
@@ -793,8 +794,9 @@ def compute_vfe_gradients_gpu(
         # For transported covariance (full matrix): use Cholesky with fallback
         try:
             L_j_t = torch.linalg.cholesky(sigma_j_reg)  # (B, N, N, K, K)
-            logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N, N)
+            logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)  # (B, N, N)
         except (torch.linalg.LinAlgError, RuntimeError):
+            san.record('cholesky_fallback')
             try:
                 eigvals = torch.linalg.eigvalsh(sigma_j_reg)  # (B, N, N, K)
                 logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)  # (B, N, N)
@@ -802,14 +804,11 @@ def compute_vfe_gradients_gpu(
                 logdet_j_t = torch.zeros(sigma_j_reg.shape[:-2], device=device, dtype=dtype)
         # For source covariance (diagonal): log|diag(σ)| = sum(log(σ))
         logdet_i = torch.sum(torch.log(sigma_q.clamp(min=eps)), dim=-1)  # (B, N)
-        # Use .clone() after expand to avoid view-related gradient issues
         logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-        kl_ceil = max(100.0, 5.0 * K)
-        kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
+        kl_values = kl_values.clamp(min=0.0, max=100.0)  # (B, N, N)
 
         # =================================================================
         # 2a. Direct term: Σ_j β_ij · ∂KL_ij/∂μ_i
@@ -925,33 +924,31 @@ def compute_vfe_gradients_gpu(
         # Log-determinant terms using Cholesky with fallback
         try:
             L_j_t = torch.linalg.cholesky(sigma_j_reg)  # (B, N, N, K, K)
-            logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N, N)
+            logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)  # (B, N, N)
         except (torch.linalg.LinAlgError, RuntimeError):
+            san.record('cholesky_fallback')
             try:
                 eigvals = torch.linalg.eigvalsh(sigma_j_reg)
                 logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
             except (torch.linalg.LinAlgError, RuntimeError):
-                # Both decompositions failed (NaN/Inf in matrix) — assume identity (logdet = 0)
                 logdet_j_t = torch.zeros(sigma_j_reg.shape[:-2], device=device, dtype=dtype)
 
         sigma_i_reg = sigma_q + eps * torch.eye(K, device=device, dtype=dtype)
         try:
             L_i = torch.linalg.cholesky(sigma_i_reg)  # (B, N, K, K)
-            logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N)
+            logdet_i = 2.0 * torch.sum(torch.log(torch.diagonal(L_i, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)  # (B, N)
         except (torch.linalg.LinAlgError, RuntimeError):
+            san.record('cholesky_fallback')
             try:
                 eigvals = torch.linalg.eigvalsh(sigma_i_reg)
                 logdet_i = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)
             except (torch.linalg.LinAlgError, RuntimeError):
                 logdet_i = torch.zeros(sigma_i_reg.shape[:-2], device=device, dtype=dtype)
-        # Use .clone() after expand to avoid view-related gradient issues
         logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
 
         # Full KL divergence
         kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
-        # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-        kl_ceil = max(100.0, 5.0 * K)
-        kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
+        kl_values = kl_values.clamp(min=0.0, max=100.0)  # (B, N, N)
 
         # avg_grad = Σ_k β_ik · ∂KL_ik/∂μ_i (used for both direct and softmax terms)
         avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair)

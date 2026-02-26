@@ -37,6 +37,7 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, List, Union
 
 from transformer.core.gauge_utils import stable_matrix_exp_pair
+from transformer.core.sanitization import san
 
 # Import our fast math kernels
 try:
@@ -721,6 +722,7 @@ def _compute_kl_matrix_torch(
             jitter *= 10.0  # escalate: 1e-4 -> 1e-3 -> 1e-2 -> 1e-1
 
     if cholesky_success:
+        san.record('cholesky_jitter', value=jitter)
         try:
             # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
             Y = torch.linalg.solve_triangular(L_p, Sigma_i_reg, upper=False)
@@ -736,22 +738,22 @@ def _compute_kl_matrix_torch(
 
             # Log determinant terms
             logdet_p = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
             )
             # L_q Cholesky can also fail if sigma embeddings produce non-PD
             # query covariances. Catch and fall through to eigenvalue path.
             L_q = torch.linalg.cholesky(Sigma_i_reg)
             logdet_q = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
             )
             logdet_term = logdet_p - logdet_q  # (B, N, N)
 
             # KL divergence for all pairs
             kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)  # (B, N, N)
-            # Clamp KL to [0, max] for numerical stability.
-            # Scale ceiling with K: each dimension contributes O(1) to KL,
-            # so max reasonable KL ≈ O(K). Use 5*K as generous ceiling.
-            kl_ceil = max(100.0, 5.0 * K)
+            kl_ceil = 100.0
+            n_clamped = int((kl_all > kl_ceil).sum().item()) + int((kl_all < 0).sum().item())
+            if n_clamped > 0:
+                san.record('kl_clamp', count=n_clamped, value=float(kl_all.max().item()))
             kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
             return kl_all
@@ -761,16 +763,14 @@ def _compute_kl_matrix_torch(
             pass
 
     # Fallback: eigenvalue-based KL (no Cholesky, robust to near-singular matrices)
-    # Use eigendecomposition which handles non-SPD gracefully via clamping.
-    # Sanitize non-finite values first: gauge transport Ω @ Σ @ Ωᵀ can produce
-    # NaN or Inf when rotation matrices become ill-conditioned; cusolver crashes
-    # on both (CUSOLVER_STATUS_INVALID_VALUE).  Use isfinite to catch both.
+    san.record('cholesky_fallback')
     Sigma_transported_reg = Sigma_transported + jitter * I
     bad_mask_p = ~torch.isfinite(Sigma_transported_reg).all(dim=-1).all(dim=-1)  # (B, N, N)
     bad_mask_q = ~torch.isfinite(Sigma_i_reg).all(dim=-1).all(dim=-1)            # (B, N, N)
     has_bad = bad_mask_p | bad_mask_q
     if has_bad.any():
-        # Both tensors are (B, N, N, K, K) so safe_cov broadcasts identically
+        n_bad = int(has_bad.sum().item())
+        san.record('nan_inf_replacement', count=n_bad)
         safe_cov = jitter * I.expand_as(Sigma_transported_reg)
         Sigma_transported_reg = torch.where(
             bad_mask_p.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_transported_reg
@@ -778,7 +778,6 @@ def _compute_kl_matrix_torch(
         Sigma_i_reg = torch.where(
             bad_mask_q.unsqueeze(-1).unsqueeze(-1), safe_cov, Sigma_i_reg
         )
-        # Also sanitize mu to avoid non-finite propagation into Mahalanobis term
         mu_transported = torch.nan_to_num(mu_transported, nan=0.0, posinf=0.0, neginf=0.0)
         mu_i = torch.nan_to_num(mu_i, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -791,6 +790,9 @@ def _compute_kl_matrix_torch(
         B, N = mu_q.shape[0], mu_q.shape[1]
         return torch.zeros(B, N, N, device=device, dtype=dtype)
 
+    n_eig_clamped = int((eigvals_p < 1e-6).sum().item()) + int((eigvals_q < 1e-6).sum().item())
+    if n_eig_clamped > 0:
+        san.record('eigval_clamp', count=n_eig_clamped)
     eigvals_p = eigvals_p.clamp(min=1e-6)
     eigvals_q = eigvals_q.clamp(min=1e-6)
 
@@ -807,7 +809,10 @@ def _compute_kl_matrix_torch(
         delta_mu, torch.einsum('bijkl,bijl->bijk', Sigma_p_inv, delta_mu))
 
     kl_all = 0.5 * (trace_term + mahal_term - K + logdet_p - logdet_q)
-    kl_ceil = max(100.0, 5.0 * K)
+    kl_ceil = 100.0
+    n_clamped = int((kl_all > kl_ceil).sum().item()) + int((kl_all < 0).sum().item())
+    if n_clamped > 0:
+        san.record('kl_clamp', count=n_clamped, value=float(kl_all.max().item()))
     return torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
 
@@ -883,9 +888,10 @@ def _kl_gaussian_torch(
             jitter *= 10.0
 
     if cholesky_success:
+        san.record('cholesky_jitter', value=jitter)
         # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-        logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1)))
-        logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2)))
+        logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1).clamp(min=eps)))
+        logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2).clamp(min=eps)))
 
         # Trace term: tr(Σ2^{-1} Σ1)
         Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
@@ -899,6 +905,7 @@ def _kl_gaussian_torch(
         quad_term = torch.dot(delta_mu, z)
     else:
         # Eigenvalue fallback for non-SPD matrices
+        san.record('cholesky_fallback')
         sigma1_reg = sigma1 + jitter * I_K
         sigma2_reg = sigma2 + jitter * I_K
         eigvals1 = torch.linalg.eigvalsh(sigma1_reg).clamp(min=1e-6)
@@ -1027,9 +1034,10 @@ def _compute_kl_matrix_diagonal(
 
     # Full KL
     kl_all = 0.5 * (trace_term + mahal_term - K + logdet_term)
-    # Clamp KL to [0, max] for numerical stability.
-    # Scale ceiling with K: each dimension contributes O(1) to KL.
-    kl_ceil = max(100.0, 5.0 * K)
+    kl_ceil = 100.0
+    n_clamped = int((kl_all > kl_ceil).sum().item()) + int((kl_all < 0).sum().item())
+    if n_clamped > 0:
+        san.record('kl_clamp', count=n_clamped, value=float(kl_all.max().item()))
     kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
 
     return kl_all
@@ -1088,7 +1096,7 @@ def _compute_kl_matrix_chunked(
     sigma_q_reg = sigma_q + eps * I
     L_q_all = torch.linalg.cholesky(sigma_q_reg)  # (B, N, K, K)
     logdet_q_all = 2.0 * torch.sum(
-        torch.log(torch.diagonal(L_q_all, dim1=-2, dim2=-1) + eps), dim=-1
+        torch.log(torch.diagonal(L_q_all, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
     )  # (B, N)
 
     # =========================================================================
@@ -1167,6 +1175,7 @@ def _compute_kl_matrix_chunked(
                     jitter *= 10.0
 
             if cholesky_success:
+                san.record('cholesky_jitter', value=jitter)
                 # Trace term: tr(Σ_p⁻¹ Σ_q)
                 Y = torch.linalg.solve_triangular(L_p, sigma_i_exp, upper=False)
                 Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
@@ -1181,19 +1190,19 @@ def _compute_kl_matrix_chunked(
 
                 # Log determinant terms
                 logdet_p = 2.0 * torch.sum(
-                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
                 )  # (B, n_i, n_j)
                 logdet_q_i_exp = logdet_q_i[:, :, None].expand(-1, -1, n_j)  # (B, n_i, n_j)
                 logdet_term = logdet_p - logdet_q_i_exp
 
                 # KL divergence for chunk
                 kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
-                # Clamp KL to [0, 100] for numerical stability
-                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=max(100.0, 5.0 * K))
+                kl_chunk = torch.clamp(kl_chunk, min=0.0, max=100.0)
 
                 col_chunks_list.append(kl_chunk)
 
             else:
+                san.record('cholesky_fallback')
                 # Fallback to element-wise computation if Cholesky fails
                 # Collect values in list to preserve autograd graph
                 fallback_vals = []
@@ -1341,7 +1350,7 @@ def _compute_kl_matrix_diagonal_chunked(
             # Full KL
             kl_chunk = 0.5 * (trace_term + mahal_term - K + logdet_term)
             # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
-            kl_ceil = max(100.0, 5.0 * K)
+            kl_ceil = 100.0
             kl_chunk = torch.clamp(kl_chunk, min=0.0, max=kl_ceil)
 
             col_chunks_list.append(kl_chunk)
@@ -1542,26 +1551,28 @@ def _compute_kl_matrix_block_diagonal(
 
                 # Log determinant terms
                 logdet_p = 2.0 * torch.sum(
-                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                    torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
                 )
                 logdet_q = 2.0 * torch.sum(
-                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                    torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
                 )
 
                 # KL for this block
                 kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
                 # Clamp KL to [0, 100] for numerical stability
-                kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                kl_block = torch.clamp(kl_block, min=0.0, max=100.0)
 
                 # ACCUMULATE to total KL (additive decomposition)
                 # Use non-in-place addition to preserve autograd graph
                 kl_total = kl_total + kl_block
                 cholesky_succeeded = True
+                san.record('cholesky_jitter', value=jitter)
                 break
             except RuntimeError:
                 continue
 
         if not cholesky_succeeded:
+            san.record('cholesky_fallback')
             # Cholesky failed (ill-conditioned covariance) - use diagonal KL approximation.
             # CRITICAL: The fallback must depend on phi through the transported
             # quantities to preserve the autograd graph. A constant fallback would
@@ -1581,7 +1592,7 @@ def _compute_kl_matrix_block_diagonal(
             ).sum(dim=-1)
 
             kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
-            kl_block = torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+            kl_block = torch.clamp(kl_block, min=0.0, max=100.0)
             kl_total = kl_total + kl_block
 
         # Cleanup
@@ -1725,21 +1736,23 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                         # Log det terms
                         logdet_p = 2.0 * torch.sum(
-                            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1
+                            torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
                         )
                         logdet_q = 2.0 * torch.sum(
-                            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1
+                            torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
                         )
 
                         # Accumulate block KL (non-in-place to preserve autograd graph)
                         kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                        kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=max(100.0, 5.0 * K))
+                        kl_chunk = kl_chunk + torch.clamp(kl_block, min=0.0, max=100.0)
                         cholesky_succeeded = True
+                        san.record('cholesky_jitter', value=jitter)
                         break
                     except RuntimeError:
                         continue
 
                 if not cholesky_succeeded:
+                    san.record('cholesky_fallback')
                     # Cholesky failed - use diagonal KL approximation.
                     # Must depend on phi through transported quantities to
                     # preserve the autograd graph (a constant would break
@@ -1760,7 +1773,7 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                     kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
                     kl_chunk = kl_chunk + torch.clamp(
-                        kl_block, min=0.0, max=max(100.0, 5.0 * K)
+                        kl_block, min=0.0, max=100.0
                     )
 
                 del sigma_transported, mu_transported
@@ -1911,6 +1924,9 @@ def aggregate_messages(
             # Complete mixture variance: Var = E[x²] - E[x]²
             sigma_aggregated = sigma_aggregated - mu_aggregated ** 2  # (B, N, K)
             # Clamp to ensure positivity (numerical cancellation can produce negatives)
+            n_neg = int((sigma_aggregated < 0).sum().item())
+            if n_neg > 0:
+                san.record('sigma_clamp_neg', count=n_neg)
             sigma_aggregated = sigma_aggregated.clamp(min=1e-6)
         else:
             # FULL COVARIANCE MODE: sigma_q is (B, N, K, K)

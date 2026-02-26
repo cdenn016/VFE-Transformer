@@ -35,7 +35,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from typing import Dict, Optional, Tuple, Any
-from dataclasses import dataclass, field
 from pathlib import Path
 import time
 import json
@@ -48,6 +47,8 @@ from transformer.analysis.rg_metrics import (
 
 # Import attention computation for gamma term
 from transformer.core.attention import compute_attention_weights
+from transformer.core.sanitization import san
+from transformer.training.config import TrainingConfig
 
 
 
@@ -312,12 +313,13 @@ def gaussian_kl_divergence(
             mahal_term = torch.sum(v ** 2, dim=-1)  # (B, N)
 
             # Log determinant terms
-            logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1)
+            logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)
             L_q = torch.linalg.cholesky(sigma_q_reg)
-            logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1) + eps), dim=-1)
+            logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1)
             logdet_term = logdet_p - logdet_q  # (B, N)
         except RuntimeError:
             # Eigenvalue fallback for non-SPD matrices
+            san.record('cholesky_fallback')
             eigvals_p = torch.linalg.eigvalsh(sigma_p_reg).clamp(min=1e-6)
             eigvals_q = torch.linalg.eigvalsh(sigma_q_reg).clamp(min=1e-6)
             logdet_p = torch.sum(torch.log(eigvals_p), dim=-1)
@@ -333,10 +335,7 @@ def gaussian_kl_divergence(
         # KL divergence
         kl = 0.5 * (trace_term + mahal_term - K + logdet_term)
 
-    # Clamp to [0, max] for numerical stability.
-    # Scale ceiling with K: each dimension contributes O(1) to KL.
-    kl_ceil = max(100.0, 5.0 * K)
-    return torch.clamp(kl, min=0.0, max=kl_ceil)
+    return torch.clamp(kl, min=0.0, max=100.0)
 
 try:
     from tqdm import tqdm
@@ -654,89 +653,6 @@ def compute_free_energy_loss(
     }
 
     return total_loss, metrics
-
-
-# =============================================================================
-# Training Configuration
-# =============================================================================
-
-@dataclass
-class TrainingConfig:
-    """
-    Unified training configuration supporting both simple and multi-group parameter optimization.
-
-    Modes:
-    - Simple (use_param_groups=False): Single learning rate for all parameters
-    - Multi-group (use_param_groups=True): Separate learning rates for mu, sigma, phi, attention, ffn, output
-    """
-
-    # Parameter grouping strategy
-    use_param_groups: bool = False  # If True, use multi-group learning rates (natural gradients!)
-
-    # Simple mode: Single learning rate (used when use_param_groups=False)
-    learning_rate: float = 3e-4
-
-    # Multi-group mode: Per-parameter group learning rates (used when use_param_groups=True)
-    mu_lr: float = 0.1           # Mean embeddings (natural gradient scale)
-    sigma_lr: float = 0.005      # Covariance embeddings (smaller for stability)
-    phi_lr: float = 0.01         # Gauge frames
-    attention_lr: float = 0.01   # Attention parameters
-    ffn_lr: float = 0.001        # FFN parameters (standard)
-    output_lr: float = 0.001     # Output projection
-
-    # Optimizer hyperparameters
-    weight_decay: float = 0.1
-    beta1: float = 0.9
-    beta2: float = 0.95
-    eps: float = 1e-8
-    grad_clip: float = 1.0
-    phi_grad_clip: float = 0.1   # Tighter clip for φ (gauge frames spike 100x)
-
-    # Learning rate schedule
-    warmup_steps: int = 1000
-    max_steps: int = 50000
-    lr_decay: str = 'cosine'  # 'cosine', 'linear', 'constant'
-    min_lr: float = 3e-5
-
-    # Free energy weights
-    # NOTE: alpha > 0 is CRITICAL for gradient flow to embeddings!
-    # KL(q||p) pulls evolved beliefs back to embedding priors and provides
-    # gradients to mu_embed even when FFN outputs are detached.
-    alpha: float = 0.1           # Self-consistency: KL(q||p) to embedding priors
-    lambda_beta: float = 1.0     # Belief alignment: Σβ_ij·KL (CRUCIAL!)
-    lambda_gamma: float = 0.0    # Model alignment (disabled by default)
-    kappa_gamma: float = 1.0     # Temperature for γ_ij coupling weights
-
-    # Training
-    batch_size: int = 16
-    num_epochs: Optional[int] = None
-    accumulation_steps: int = 1
-
-    # Logging
-    log_every: int = 100
-    eval_every: int = 1000
-    save_every: int = 5000
-    log_interval: int = 10       # Alias for log_every (for compatibility)
-    eval_interval: int = 100     # Alias for eval_every (for compatibility)
-    checkpoint_interval: int = 200
-
-    # Early stopping
-    patience: int = 0  # If > 0, stop if no improvement for this many evals
-
-    # Checkpointing
-    checkpoint_dir: Optional[Path] = None
-    save_optimizer: bool = True
-    save_total_limit: int = 3
-    resume_from: Optional[str] = None  # Path to checkpoint to resume from
-
-    # Weights & Biases
-    use_wandb: bool = False
-    wandb_project: str = 'gauge-transformer'
-    wandb_run_name: Optional[str] = None
-
-    # Device
-    device: str = 'cpu'
-    use_amp: bool = False
 
 
 # =============================================================================
