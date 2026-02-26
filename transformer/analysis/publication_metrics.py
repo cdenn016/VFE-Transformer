@@ -772,7 +772,6 @@ class PublicationMetrics:
         step: int,
         epoch: float,
         train_metrics: Dict[str, float],
-        diagnostics: Optional[Dict] = None,
         grad_norms: Optional[Dict[str, float]] = None,
         lrs: Optional[Dict[str, float]] = None,
         step_time: float = 0.0,
