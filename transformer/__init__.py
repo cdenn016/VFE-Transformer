@@ -31,7 +31,8 @@ from transformer.core.model import GaugeTransformerLM
 # =============================================================================
 # Training (from transformer.train and transformer.training)
 # =============================================================================
-from transformer.train import Trainer, TrainingConfig
+from transformer.train import Trainer
+from transformer.training.config import TrainingConfig
 from transformer.training import (
     create_optimizer,
     create_param_groups,

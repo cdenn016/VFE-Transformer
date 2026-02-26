@@ -28,6 +28,8 @@ import torch.nn.functional as F
 from typing import Tuple, Optional
 import numpy as np
 
+from transformer.core.sanitization import san
+
 
 class PriorBank(nn.Module):
     """
@@ -265,7 +267,10 @@ class PriorBank(nn.Module):
         # Compute KL(q || π_v) for all v
         # For diagonal Gaussians:
         # KL = 0.5 * (Σ_q/Σ_p + (μ_q-μ_p)²/Σ_p - 1 + log(Σ_p/Σ_q))
-        variance_floor = max(self.eps, 1e-4)
+        variance_floor = 1e-6
+        n_clamped = int((sigma_q_exp < variance_floor).sum().item()) + int((sigma_p_exp < variance_floor).sum().item())
+        if n_clamped > 0:
+            san.record('sigma_clamp', count=n_clamped)
         sigma_q_safe = sigma_q_exp.clamp(min=variance_floor)
         sigma_p_safe = sigma_p_exp.clamp(min=variance_floor)
 

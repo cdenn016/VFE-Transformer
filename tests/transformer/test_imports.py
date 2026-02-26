@@ -166,78 +166,10 @@ class TestBaselinesImports:
         assert StandardTransformerLM is not None
 
 
-class TestBackwardCompatibility:
-    """Test backward compatibility imports (old paths still work)."""
+class TestSanitizationImports:
+    """Test sanitization tracker imports."""
 
-    def test_old_model_import(self):
-        """Test old import path: from transformer.model import ..."""
-        from transformer.model import GaugeTransformerLM
-        from transformer.core.model import GaugeTransformerLM as NewGaugeTransformerLM
-        assert GaugeTransformerLM is NewGaugeTransformerLM
-
-    def test_old_attention_import(self):
-        """Test old import path: from transformer.attention import ..."""
-        from transformer.attention import (
-            compute_attention_weights,
-            IrrepMultiHeadAttention,
-        )
-        from transformer.core.attention import (
-            compute_attention_weights as new_compute,
-            IrrepMultiHeadAttention as NewAttention,
-        )
-        assert compute_attention_weights is new_compute
-        assert IrrepMultiHeadAttention is NewAttention
-
-    def test_old_embeddings_import(self):
-        """Test old import path: from transformer.embeddings import ..."""
-        from transformer.embeddings import GaugeTokenEmbedding
-        from transformer.core.embeddings import GaugeTokenEmbedding as NewEmbed
-        assert GaugeTokenEmbedding is NewEmbed
-
-    def test_old_transformer_block_import(self):
-        """Test old import path: from transformer.transformer_block import ..."""
-        from transformer.transformer_block import GaugeTransformerBlock, GaugeTransformerStack
-        from transformer.core.blocks import (
-            GaugeTransformerBlock as NewBlock,
-            GaugeTransformerStack as NewStack,
-        )
-        assert GaugeTransformerBlock is NewBlock
-        assert GaugeTransformerStack is NewStack
-
-    def test_old_standard_transformer_import(self):
-        """Test old import path: from transformer.standard_transformer import ..."""
-        from transformer.standard_transformer import StandardTransformerLM
-        from transformer.baselines.standard_transformer import StandardTransformerLM as NewStd
-        assert StandardTransformerLM is NewStd
-
-    def test_old_rg_metrics_import(self):
-        """Test old import path: from transformer.rg_metrics import ..."""
-        from transformer.rg_metrics import compute_rg_diagnostics, RGDiagnostics
-        from transformer.analysis.rg_metrics import (
-            compute_rg_diagnostics as new_compute,
-            RGDiagnostics as NewDiag,
-        )
-        assert compute_rg_diagnostics is new_compute
-        assert RGDiagnostics is NewDiag
-
-    def test_old_trajectory_tracking_import(self):
-        """Test old import path: from transformer.trajectory_tracking import ..."""
-        from transformer.trajectory_tracking import TrajectoryRecorder, get_global_recorder
-        from transformer.analysis.trajectory import (
-            TrajectoryRecorder as NewRecorder,
-            get_global_recorder as new_get,
-        )
-        assert TrajectoryRecorder is NewRecorder
-        assert get_global_recorder is new_get
-
-    def test_old_prior_bank_import(self):
-        """Test old import path: from transformer.prior_bank import ..."""
-        from transformer.prior_bank import PriorBank
-        from transformer.core.prior_bank import PriorBank as NewPriorBank
-        assert PriorBank is NewPriorBank
-
-    def test_old_ffn_import(self):
-        """Test old import path: from transformer.ffn import ..."""
-        from transformer.ffn import GaugeFFN
-        from transformer.core.ffn import GaugeFFN as NewFFN
-        assert GaugeFFN is NewFFN
+    def test_sanitization_tracker_import(self):
+        """Test importing sanitization tracker."""
+        from transformer.core.sanitization import san, SanitizationTracker
+        assert isinstance(san, SanitizationTracker)

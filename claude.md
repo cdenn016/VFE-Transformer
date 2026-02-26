@@ -87,7 +87,7 @@ If the RG theory is correct, VFE_dynamic should show:
 ### Usage
 
 ```python
-from transformer.ffn import GaugeFFN
+from transformer.core.ffn import GaugeFFN
 
 # Create VFE_dynamic FFN
 ffn = GaugeFFN(
