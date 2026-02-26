@@ -13,7 +13,7 @@ Date: December 2025
 
 import torch
 import torch.nn as nn
-from typing import List, Optional, Literal, Tuple, Union
+from typing import List, Optional, Literal
 
 from transformer.core.variational_ffn import (
     VariationalFFNDynamic,  # Dynamic-β VFE with attention-belief co-evolution
