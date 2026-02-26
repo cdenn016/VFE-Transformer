@@ -325,7 +325,7 @@ class GaugeTransformerBlock(nn.Module):
         mu_normalized = self.norm1(mu_q)
 
         # Multi-head attention (gauge-theoretic!)
-        # Capture beta if needed for variational/hamiltonian FFN or trajectory recording
+        # Capture beta if needed for variational FFN or trajectory recording
         recorder = get_global_recorder() if TRAJECTORY_TRACKING_AVAILABLE else None
         recording_attention = recorder is not None and recorder.enabled and recorder.record_attention
         need_beta = self.ffn_mode == 'VFE_dynamic'
@@ -398,10 +398,6 @@ class GaugeTransformerBlock(nn.Module):
         # phi is updated inside the VFE FFN via gradient descent (when update_phi=True)
         # This is the principled approach: φ evolves via ∂F/∂φ, not a neural network.
         return mu_q, sigma_q, phi_out
-
-    def get_hamiltonian_diagnostics(self) -> None:
-        """Stub for backward compatibility with trajectory recording."""
-        return None
 
     def extra_repr(self) -> str:
         return (
@@ -640,11 +636,9 @@ class GaugeTransformerStack(nn.Module):
                 cached_head_transports=cached_head_transports,
             )
 
-            # Trajectory recording: record output and diagnostics
+            # Trajectory recording: record output
             if recording_enabled:
-                # Get Hamiltonian diagnostics if available
-                diagnostics = block.get_hamiltonian_diagnostics()
-                recorder.record_layer_output(mu_q, sigma_q, phi, diagnostics)
+                recorder.record_layer_output(mu_q, sigma_q, phi)
                 recorder.end_layer()
 
             if return_intermediates:
@@ -659,10 +653,6 @@ class GaugeTransformerStack(nn.Module):
         mu_q = self.final_norm(mu_q)
 
         return mu_q, sigma_q, phi, intermediates
-
-    def get_hamiltonian_diagnostics(self) -> List[Optional[dict]]:
-        """Get Hamiltonian diagnostics from all layers."""
-        return [block.get_hamiltonian_diagnostics() for block in self.blocks]
 
 
 # =============================================================================

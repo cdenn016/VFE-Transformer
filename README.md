@@ -239,7 +239,7 @@ VFE-Transformer/
 │   │   ├── attention.py           #   KL-divergence multi-head attention
 │   │   ├── blocks.py              #   Transformer block and stack
 │   │   ├── embeddings.py          #   Gauge token/positional embeddings
-│   │   ├── variational_ffn.py     #   VFE feedforward (VFE_dynamic, hamiltonian, pure_fep)
+│   │   ├── variational_ffn.py     #   VFE feedforward (VFE_dynamic, pure_fep)
 │   │   ├── ffn.py                 #   Standard gauge FFN
 │   │   ├── prior_bank.py          #   Token-dependent prior bank for pure FEP
 │   │   ├── gauge_utils.py         #   Shared matrix exp and KL utilities
@@ -267,7 +267,6 @@ VFE-Transformer/
 │   │   └── standard_transformer.py#   Standard dot-product attention transformer
 │   ├── experimental/              # Experimental code
 │   │   ├── fep_transformer.py     #   FEP transformer variant
-│   │   ├── hamiltonian_ffn.py     #   Hamiltonian (symplectic) FFN dynamics
 │   │   ├── pure_fep_transformer.py#   Pure FEP (backprop-free) transformer
 │   │   └── train_fep.py           #   FEP training scripts
 │   ├── utils/                     # Utilities
@@ -355,7 +354,6 @@ Message aggregation (GL(K) metric-corrected):
 | Mode | Mechanism | Backprop? |
 |---|---|---|
 | **VFE_dynamic** | Iterative VFE minimization with natural gradients | Yes (outer loop) |
-| **hamiltonian** | Symplectic integration of Hamiltonian dynamics | Yes (outer loop) |
 | **pure_fep** | Prior evolution via p-flow (no weight updates) | No |
 | **standard** | Conventional MLP (for baseline comparison) | Yes |
 

@@ -6,21 +6,19 @@ Created on Tue Dec  9 21:05:21 2025
 """
 
 """
-Phase Space Trajectory Tracking for Hamiltonian Transformer
-============================================================
+Phase Space Trajectory Tracking for Transformer
+=================================================
 
 Records and visualizes (μ, Σ, φ) trajectories through:
-1. Leapfrog steps within FFN layers
-2. Transformer layers (embedding → output)
-3. Training iterations
+1. Transformer layers (embedding → output)
+2. Training iterations
 
 Key use cases:
-- Verify energy conservation in Hamiltonian dynamics
 - Visualize belief evolution through the network
 - Token attribution via trajectory reversal
 - Training diagnostics (convergence, stability)
 
-Author: Chris 
+Author: Chris
 Date: December 2025
 """
 
@@ -37,38 +35,6 @@ from pathlib import Path
 # =============================================================================
 
 @dataclass
-class LeapfrogSnapshot:
-    """
-    Single snapshot of phase space state during leapfrog integration.
-
-    Stores lightweight copies (detached, on CPU) to avoid memory issues.
-    """
-    step: int                          # Leapfrog step index (0 = initial)
-    mu: np.ndarray                     # (B, N, K) belief means
-    Sigma_diag: np.ndarray             # (B, N, K) diagonal of covariances (memory efficient)
-    phi: np.ndarray                    # (B, N, 3) gauge frames
-    pi_mu_norm: float                  # ||π_μ|| momentum magnitude
-    pi_Sigma_norm: float               # ||π_Σ|| momentum magnitude
-    H: float                           # Hamiltonian (total energy)
-    T: float                           # Kinetic energy
-    V: float                           # Potential energy
-
-    def to_dict(self) -> dict:
-        """Convert to JSON-serializable dict."""
-        return {
-            'step': self.step,
-            'mu': self.mu.tolist() if isinstance(self.mu, np.ndarray) else self.mu,
-            'Sigma_diag': self.Sigma_diag.tolist() if isinstance(self.Sigma_diag, np.ndarray) else self.Sigma_diag,
-            'phi': self.phi.tolist() if isinstance(self.phi, np.ndarray) else self.phi,
-            'pi_mu_norm': float(self.pi_mu_norm),
-            'pi_Sigma_norm': float(self.pi_Sigma_norm),
-            'H': float(self.H),
-            'T': float(self.T),
-            'V': float(self.V),
-        }
-
-
-@dataclass
 class LayerTrajectory:
     """
     Trajectory through a single transformer layer.
@@ -76,8 +42,6 @@ class LayerTrajectory:
     Records:
     - Input/output beliefs
     - Attention weights
-    - Leapfrog trajectory (if Hamiltonian FFN)
-    - Energy diagnostics
     """
     layer_idx: int
 
@@ -95,14 +59,6 @@ class LayerTrajectory:
     beta: Optional[np.ndarray] = None  # (B, n_heads, N, N) or (B, N, N)
     kl_matrix: Optional[np.ndarray] = None  # (B, N, N) KL divergences
 
-    # Hamiltonian FFN leapfrog trajectory (if applicable)
-    leapfrog_steps: List[LeapfrogSnapshot] = field(default_factory=list)
-
-    # Energy diagnostics
-    H_init: Optional[float] = None
-    H_final: Optional[float] = None
-    delta_H: Optional[float] = None
-
     def to_dict(self) -> dict:
         """Convert to JSON-serializable dict."""
         return {
@@ -111,10 +67,6 @@ class LayerTrajectory:
             'mu_out': self.mu_out.tolist() if isinstance(self.mu_out, np.ndarray) else None,
             'phi_in': self.phi_in.tolist() if isinstance(self.phi_in, np.ndarray) else None,
             'phi_out': self.phi_out.tolist() if isinstance(self.phi_out, np.ndarray) else None,
-            'H_init': self.H_init,
-            'H_final': self.H_final,
-            'delta_H': self.delta_H,
-            'n_leapfrog_steps': len(self.leapfrog_steps),
         }
 
 
@@ -143,7 +95,6 @@ class ForwardTrajectory:
 
     # Metadata
     ffn_mode: str = 'learned'
-    total_delta_H: float = 0.0         # Sum of |ΔH| across all Hamiltonian layers
 
     def to_dict(self) -> dict:
         """Convert to JSON-serializable dict."""
@@ -151,7 +102,6 @@ class ForwardTrajectory:
             'batch_size': self.batch_size,
             'seq_len': self.seq_len,
             'ffn_mode': self.ffn_mode,
-            'total_delta_H': self.total_delta_H,
             'n_layers': len(self.layer_trajectories),
             'logits_entropy': self.logits_entropy,
             'layer_summaries': [lt.to_dict() for lt in self.layer_trajectories],
@@ -167,7 +117,7 @@ class TrajectoryRecorder:
     Records phase space trajectories during forward passes.
 
     Usage:
-        recorder = TrajectoryRecorder(enabled=True, record_leapfrog=True)
+        recorder = TrajectoryRecorder(enabled=True)
 
         # In model forward:
         recorder.start_forward(batch_size, seq_len, ffn_mode)
@@ -178,10 +128,7 @@ class TrajectoryRecorder:
         recorder.record_layer_input(mu, Sigma, phi)
         recorder.record_attention(beta, kl_matrix)
 
-        # In Hamiltonian FFN (if applicable):
-        recorder.record_leapfrog_step(step, state, H, T, V)
-
-        recorder.record_layer_output(mu, Sigma, phi, diagnostics)
+        recorder.record_layer_output(mu, Sigma, phi)
         recorder.end_layer()
 
         # After forward:
@@ -191,7 +138,6 @@ class TrajectoryRecorder:
     def __init__(
         self,
         enabled: bool = False,
-        record_leapfrog: bool = False,
         record_attention: bool = False,
         max_batch_elements: int = 4,  # Only record first N batch elements (memory)
         device_for_storage: str = 'cpu',
@@ -201,13 +147,11 @@ class TrajectoryRecorder:
 
         Args:
             enabled: If False, all recording is no-op (zero overhead)
-            record_leapfrog: Record per-step leapfrog trajectory (expensive)
             record_attention: Record full attention matrices (expensive)
             max_batch_elements: Limit batch size for storage
             device_for_storage: Device to store tensors ('cpu' recommended)
         """
         self.enabled = enabled
-        self.record_leapfrog = record_leapfrog
         self.record_attention = record_attention
         self.max_batch_elements = max_batch_elements
         self.device_for_storage = device_for_storage
@@ -286,13 +230,6 @@ class TrajectoryRecorder:
             entropy = -(probs * torch.log(probs + 1e-10)).sum(dim=-1).mean()
             self._current_forward.logits_entropy = entropy.item()
 
-        # Sum delta_H from all Hamiltonian layers
-        total_dH = sum(
-            abs(lt.delta_H) for lt in self._current_forward.layer_trajectories
-            if lt.delta_H is not None
-        )
-        self._current_forward.total_delta_H = total_dH
-
         # Store in history
         trajectory = self._current_forward
         self.history.append(trajectory)
@@ -354,21 +291,14 @@ class TrajectoryRecorder:
         mu: torch.Tensor,
         Sigma: torch.Tensor,
         phi: torch.Tensor,
-        diagnostics: Optional[Dict] = None,
     ) -> None:
-        """Record layer output state and diagnostics."""
+        """Record layer output state."""
         if not self.enabled or self._current_layer is None:
             return
 
         self._current_layer.mu_out = self._to_numpy(mu)
         self._current_layer.Sigma_diag_out = self._sigma_to_diag(Sigma)
         self._current_layer.phi_out = self._to_numpy(phi)
-
-        # Extract Hamiltonian diagnostics
-        if diagnostics is not None:
-            self._current_layer.H_init = diagnostics.get('H_init')
-            self._current_layer.H_final = diagnostics.get('H_final')
-            self._current_layer.delta_H = diagnostics.get('delta_H')
 
     def end_layer(self) -> None:
         """End layer recording and add to forward trajectory."""
@@ -379,73 +309,8 @@ class TrajectoryRecorder:
         self._current_layer = None
 
     # =========================================================================
-    # Leapfrog Step Recording (for Hamiltonian FFN)
-    # =========================================================================
-
-    def record_leapfrog_step(
-        self,
-        step: int,
-        mu: torch.Tensor,
-        Sigma: torch.Tensor,
-        phi: torch.Tensor,
-        pi_mu: torch.Tensor,
-        pi_Sigma: torch.Tensor,
-        H: float,
-        T: float,
-        V: float,
-    ) -> None:
-        """Record a single leapfrog integration step."""
-        if not self.enabled or not self.record_leapfrog or self._current_layer is None:
-            return
-
-        snapshot = LeapfrogSnapshot(
-            step=step,
-            mu=self._to_numpy(mu),
-            Sigma_diag=self._sigma_to_diag(Sigma),
-            phi=self._to_numpy(phi),
-            pi_mu_norm=pi_mu.norm().item(),
-            pi_Sigma_norm=pi_Sigma.norm().item(),
-            H=H,
-            T=T,
-            V=V,
-        )
-        self._current_layer.leapfrog_steps.append(snapshot)
-
-    # =========================================================================
     # Analysis and Export
     # =========================================================================
-
-    def get_energy_trace(self, trajectory: Optional[ForwardTrajectory] = None) -> Dict[str, List[float]]:
-        """
-        Extract energy conservation trace from trajectory.
-
-        Returns:
-            Dict with 'H', 'T', 'V' lists per leapfrog step (aggregated across layers)
-        """
-        if trajectory is None:
-            trajectory = self.history[-1] if self.history else None
-
-        if trajectory is None:
-            return {'H': [], 'T': [], 'V': [], 'delta_H': []}
-
-        H_trace = []
-        T_trace = []
-        V_trace = []
-
-        for lt in trajectory.layer_trajectories:
-            for snap in lt.leapfrog_steps:
-                H_trace.append(snap.H)
-                T_trace.append(snap.T)
-                V_trace.append(snap.V)
-
-        delta_H = [abs(lt.delta_H) for lt in trajectory.layer_trajectories if lt.delta_H is not None]
-
-        return {
-            'H': H_trace,
-            'T': T_trace,
-            'V': V_trace,
-            'delta_H': delta_H,
-        }
 
     def get_mu_trajectory(
         self,
@@ -518,7 +383,6 @@ def set_global_recorder(recorder: TrajectoryRecorder) -> None:
 
 
 def enable_trajectory_tracking(
-    record_leapfrog: bool = False,
     record_attention: bool = False,
     max_batch_elements: int = 4,
 ) -> TrajectoryRecorder:
@@ -526,14 +390,12 @@ def enable_trajectory_tracking(
     Enable trajectory tracking with a new global recorder.
 
     Example:
-        >>> recorder = enable_trajectory_tracking(record_leapfrog=True)
+        >>> recorder = enable_trajectory_tracking()
         >>> # Run model forward passes
         >>> trajectory = recorder.history[-1]
-        >>> energy = recorder.get_energy_trace(trajectory)
     """
     recorder = TrajectoryRecorder(
         enabled=True,
-        record_leapfrog=record_leapfrog,
         record_attention=record_attention,
         max_batch_elements=max_batch_elements,
     )
@@ -564,8 +426,6 @@ if __name__ == '__main__':
     mu = torch.randn(B, N, K)
     Sigma = torch.eye(K).unsqueeze(0).unsqueeze(0).expand(B, N, -1, -1).clone()
     phi = torch.randn(B, N, 3) * 0.1
-    pi_mu = torch.randn(B, N, K) * 0.1
-    pi_Sigma = torch.randn(B, N, K, K) * 0.01
 
     print(f"    Shapes: mu={mu.shape}, Sigma={Sigma.shape}, phi={phi.shape}")
 
@@ -573,14 +433,13 @@ if __name__ == '__main__':
     print(f"\n[2] Creating trajectory recorder...")
     recorder = TrajectoryRecorder(
         enabled=True,
-        record_leapfrog=True,
         record_attention=True,
         max_batch_elements=2,
     )
 
     # Simulate forward pass
     print(f"\n[3] Simulating forward pass...")
-    recorder.start_forward(B, N, ffn_mode='hamiltonian')
+    recorder.start_forward(B, N, ffn_mode='VFE_dynamic')
     recorder.record_embeddings(mu, Sigma, phi)
 
     # Simulate 2 layers
@@ -593,27 +452,9 @@ if __name__ == '__main__':
         beta = torch.softmax(torch.randn(B, 4, N, N), dim=-1)
         recorder.record_attention(beta)
 
-        # Simulate leapfrog steps
-        for step in range(5):
-            H = 10.0 - step * 0.1 + torch.randn(1).item() * 0.01
-            T = 5.0 + step * 0.05
-            V = H - T
-            recorder.record_leapfrog_step(
-                step=step,
-                mu=mu + step * 0.1,
-                Sigma=Sigma,
-                phi=phi,
-                pi_mu=pi_mu,
-                pi_Sigma=pi_Sigma,
-                H=H, T=T, V=V,
-            )
-
         # Layer output
         mu_out = mu + torch.randn_like(mu) * 0.1
-        recorder.record_layer_output(
-            mu_out, Sigma, phi,
-            diagnostics={'H_init': 10.0, 'H_final': 9.95, 'delta_H': 0.05}
-        )
+        recorder.record_layer_output(mu_out, Sigma, phi)
         recorder.end_layer()
         mu = mu_out  # Update for next layer
 
@@ -626,25 +467,17 @@ if __name__ == '__main__':
     print(f"    Seq length: {trajectory.seq_len}")
     print(f"    FFN mode: {trajectory.ffn_mode}")
     print(f"    Layers: {len(trajectory.layer_trajectories)}")
-    print(f"    Total delta_H: {trajectory.total_delta_H:.6f}")
     print(f"    Output entropy: {trajectory.logits_entropy:.4f}")
 
-    # Get energy trace
-    print(f"\n[5] Energy trace:")
-    energy = recorder.get_energy_trace(trajectory)
-    print(f"    H samples: {len(energy['H'])}")
-    print(f"    H range: [{min(energy['H']):.4f}, {max(energy['H']):.4f}]")
-    print(f"    Per-layer delta_H: {energy['delta_H']}")
-
     # Get mu trajectory for last token
-    print(f"\n[6] Mu trajectory for last token:")
+    print(f"\n[5] Mu trajectory for last token:")
     mu_trace = recorder.get_mu_trajectory(trajectory, batch_idx=0, token_idx=-1)
     print(f"    Shape: {mu_trace.shape}")
     print(f"    ||μ|| at each layer: {[np.linalg.norm(m) for m in mu_trace]}")
 
     # Test global recorder
-    print(f"\n[7] Testing global recorder...")
-    global_rec = enable_trajectory_tracking(record_leapfrog=True)
+    print(f"\n[6] Testing global recorder...")
+    global_rec = enable_trajectory_tracking()
     assert get_global_recorder() is global_rec
     disable_trajectory_tracking()
     assert not get_global_recorder().enabled

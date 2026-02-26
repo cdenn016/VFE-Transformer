@@ -41,8 +41,6 @@ Comprehensive Metrics Tracking:
     - Bits-per-character (BPC)
     - Attention statistics (β_mean, KL_mean)
     - Performance (step time, tokens/sec)
-    - Hamiltonian diagnostics (H_init, H_final, ΔH) for hamiltonian mode
-
 Output Files:
     - checkpoints_publication/ffn_{mode}/metrics.csv - comprehensive training metrics
     - checkpoints_publication/ffn_{mode}/best_model.pt - best model checkpoint
@@ -1224,10 +1222,6 @@ class PublicationTrainer(FastTrainer):
             if key in full_metrics:
                 metrics[key] = full_metrics[key]
 
-        # Carry over Hamiltonian diagnostics for physics metrics
-        if 'hamiltonian_diagnostics' in full_metrics:
-            metrics['hamiltonian_diagnostics'] = full_metrics['hamiltonian_diagnostics']
-
         # Compute RG metrics if enabled and attention info was returned
         if compute_rg and 'attention_info' in full_metrics:
             rg_metrics = compute_rg_metrics_from_attention(
@@ -1429,8 +1423,6 @@ class PublicationTrainer(FastTrainer):
 
                 # Log to comprehensive publication metrics (if enabled)
                 if self.pub_metrics:
-                    diagnostics = metrics.get('hamiltonian_diagnostics', None)
-
                     self.pub_metrics.record_training_step(
                         step=step + 1,
                         epoch=(step + 1) / len(self.train_loader),
@@ -1440,7 +1432,6 @@ class PublicationTrainer(FastTrainer):
                             'attention_entropy': metrics.get('attention_entropy', 0),
                             'attention_concentration': metrics.get('attention_concentration', 0),
                         },
-                        diagnostics=diagnostics,
                         grad_norms=grad_norms,
                         lrs=lrs,
                         step_time=step_time,
