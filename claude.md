@@ -31,7 +31,7 @@ Scale ζ=2:  Super-meta-agents...
 |-----------|------|-------------|
 | Transformer Block | `transformer/transformer_block.py` | Main block with gauge attention + FFN |
 | Attention | `transformer/attention.py` | KL-divergence based attention (no W_Q, W_K!) |
-| FFN | `transformer/ffn.py` | Unified FFN (learned, VFE, hamiltonian modes) |
+| FFN | `transformer/ffn.py` | Unified FFN (learned, VFE modes) |
 | Variational FFN | `transformer/variational_ffn.py` | VFE implementations including VFE_dynamic |
 | RG Metrics | `transformer/rg_metrics.py` | **NEW**: RG analysis tools |
 | Model | `transformer/model.py` | Full language model |
@@ -43,7 +43,6 @@ Scale ζ=2:  Super-meta-agents...
 | `learned` | Standard MLP + GELU | Baseline |
 | `variational_gradient_engine` / `VFE` | Fixed-β VFE descent | Standard active inference |
 | `VFE_dynamic` | **Dynamic-β VFE** (β recomputed each step) | RG analysis, meta-agent emergence |
-| `hamiltonian` | Symplectic Hamiltonian dynamics | Energy-conserving evolution |
 
 ## Key Equations
 
@@ -130,8 +129,7 @@ VFE-Transformer-Renormalization/
 │   ├── variational_ffn.py    # VFE implementations
 │   ├── rg_metrics.py         # RG analysis tools (NEW)
 │   ├── transformer_block.py  # Main transformer block
-│   ├── model.py              # Full LM
-│   └── hamiltonian_ffn.py    # Hamiltonian dynamics
+│   └── model.py              # Full LM
 ├── experiments/
 │   └── rg_analysis_demo.py   # RG demo/test script (NEW)
 ├── gradients/
@@ -215,7 +213,6 @@ Apply these when working on this codebase:
 | Module | CUDA Status | Notes |
 |--------|-------------|-------|
 | `model.py` | Full | Standard PyTorch nn.Module |
-| `hamiltonian_ffn.py` | Full | Uses `torch.linalg.matrix_exp`, `torch.linalg.eigh` |
 | `attention.py` | Full | Vectorized PyTorch path auto-selected on CUDA |
 | `embeddings.py` | Full | Standard `nn.Embedding`, `register_buffer` |
 | `train.py` | Full | Modern AMP API (`torch.amp.autocast/GradScaler`) |

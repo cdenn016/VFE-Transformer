@@ -16,7 +16,6 @@ from transformer.analysis.rg_metrics import (
 )
 from transformer.analysis.trajectory import (
     TrajectoryRecorder,
-    LeapfrogSnapshot,
     LayerTrajectory,
     ForwardTrajectory,
 )
@@ -29,7 +28,6 @@ __all__ = [
 
     # Trajectory tracking
     'TrajectoryRecorder',
-    'LeapfrogSnapshot',
     'LayerTrajectory',
     'ForwardTrajectory',
 ]
