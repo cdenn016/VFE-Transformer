@@ -1,6 +1,9 @@
 # Gauge-Theoretic Transformer
 
-A research framework implementing gauge-covariant variational free energy (VFE) minimization for language modeling and multi-agent systems. This codebase accompanies the manuscript:
+A research framework implementing gauge-covariant variational free energy (VFE) minimization for language modeling. This codebase accompanies the manuscript:
+
+> **Attention, Transformers, and Backpropagation are Degenerate Limits of the Variational Free Energy Principle**
+> Robert C. Dennis
 
 ## Core Thesis
 
@@ -88,6 +91,8 @@ G_multi-head = GL(d_head)^H  subset  GL(d_k)
 
 Each head learns an independent GL(d_head) gauge transformation. For compact groups like SO(3), irreducible representations yield non-uniform head dimensions (1, 3, 5, 7, ...) with intrinsic geometric meaning.
 
+Cross-head coupling extends this to sparse off-diagonal GL mixing between selected head pairs, enabling gauge transport across representation blocks.
+
 ### Multi-Timescale Dynamics
 
 The free energy naturally separates into:
@@ -136,25 +141,20 @@ For context: random-chance perplexity is ~50,000. These models capture substanti
 **Requirements**: Python 3.9+ with CUDA-capable GPU (recommended)
 
 ```bash
-git clone https://github.com/cdenn016/Gauge-Transformer.git
-cd Gauge-Transformer
-pip install torch numpy scipy numba matplotlib seaborn plotly networkx scikit-learn datasets tiktoken
+git clone https://github.com/cdenn016/VFE-Transformer.git
+cd VFE-Transformer
+pip install torch numpy scipy matplotlib seaborn plotly scikit-learn datasets tiktoken
 ```
 
-### Core Dependencies
+### Optional Dependencies
 
-- **PyTorch** (>=2.0.0) with CUDA support
-- **NumPy / SciPy** (numerical computation)
-- **Numba** (JIT compilation for transport kernels)
-- **Matplotlib / Seaborn / Plotly** (visualization)
-- **NetworkX** (graph operations for meta-agent detection)
-- **scikit-learn** (spectral clustering, metrics)
-- **datasets** (HuggingFace, for WikiText)
-- **tiktoken** or **transformers** (tokenization)
+- **Numba** --- JIT compilation for transport kernels (80x speedup over NumPy fallback)
+- **NetworkX** --- Graph operations for RG flow analysis
+- **Weights & Biases** (`wandb`) --- Experiment tracking
 
 ## Usage
 
-### Transformer Training
+### Training
 
 ```bash
 # Standard VFE training with gauge-theoretic attention
@@ -163,77 +163,152 @@ python transformer/train.py
 # Publication-quality training with all experimental features
 python transformer/train_publication.py
 
+# Resume from checkpoint after interruption
+python transformer/resume_training.py
+```
+
+### Inference and Generation
+
+```bash
 # Text generation from trained model
 python generate.py
 
 # Model inference and analysis
-python inference.py --checkpoint path/to/model.pt
+python inference.py --checkpoint path/to/model.pt --prompt "The quick brown"
+
+# Generate multiple samples
+python inference.py --checkpoint path/to/model.pt --prompt "AI is" --num_samples 5
+
+# Visualize attention patterns
+python inference.py --checkpoint path/to/model.pt --prompt "The cat sat" --visualize
 ```
 
-### Multi-Agent Simulation
+### Analysis
 
 ```bash
-# Default simulation
-python simulation_runner.py
+# RG flow analysis on trained model
+python scripts/analyze_rg_flow.py --checkpoint path/to/model.pt --output rg_analysis/
 
-# Presets
-python simulation_runner.py --preset emergence    # Meta-agent emergence demo
-python simulation_runner.py --preset ouroboros    # Ouroboros Tower (non-Markovian memory)
-python simulation_runner.py --preset hamiltonian  # Underdamped symplectic dynamics
+# KN-5 baseline comparison (WikiText-103, matched BPE tokenization)
+python scripts/kn5_baseline.py
+
+# Publication figures
+python scripts/generate_publication_figures.py
+```
+
+### Python API
+
+```python
+from transformer import GaugeTransformerLM, Trainer, TrainingConfig
+from transformer.training.config import get_vfe_dynamic_config
+
+# Create model
+config = {
+    'vocab_size': 257,        # Byte-level
+    'embed_dim': 64,          # K = 64
+    'n_layers': 3,
+    'irrep_spec': [('fund', 4, 16)],  # 4 heads x GL(16)
+    'hidden_dim': 256,
+    'max_seq_len': 256,
+    'kappa_beta': 1.0,
+    'gauge_group': 'GLK',
+    'gauge_mode': 'learned',  # or 'trivial' for Omega = I
+    'ffn_mode': 'VFE_dynamic',
+}
+model = GaugeTransformerLM(config)
+
+# Training config
+train_config = get_vfe_dynamic_config(
+    batch_size=16,
+    max_steps=50000,
+    use_wandb=False,
+)
+
+# Train
+trainer = Trainer(model=model, config=train_config)
+trainer.train(train_loader, val_loader)
 ```
 
 ## Project Structure
 
 ```
-Gauge-Transformer/
-├── transformer/                # Gauge-theoretic transformer architecture
-│   ├── core/                  # Core components
-│   │   ├── model.py           #   GaugeTransformerLM (full language model)
-│   │   ├── attention.py       #   KL-divergence multi-head attention
-│   │   ├── blocks.py          #   Transformer blocks with gauge transport
-│   │   ├── variational_ffn.py #   VFE feedforward (VFE_dynamic, hamiltonian modes)
-│   │   ├── embeddings.py      #   Gauge token/positional embeddings
-│   │   └── prior_bank.py      #   Token-dependent prior bank for pure FEP
-│   ├── analysis/              # RG metrics, semantic analysis, publication metrics
-│   ├── data/                  # Dataset loading (WikiText-2, WikiText-103)
-│   ├── training/              # Training configuration and utilities
-│   ├── train.py               # Main training loop
-│   └── train_publication.py   # Publication-quality training
-├── agent/                     # Multi-agent system
-│   ├── agents.py              # Agent: section of statistical bundle
-│   ├── system.py              # MultiAgentSystem orchestrator
-│   ├── trainer.py             # Gradient-based trainer
-│   └── hamiltonian_trainer.py # Symplectic integration trainer
-├── geometry/                  # Differential geometry engine
-│   ├── geometry_base.py       # Base manifold, support regions
-│   ├── connection.py          # Gauge connections, curvature
-│   ├── lie_algebra.py         # Lie bracket computations
-│   └── geodesic_corrections.py# Riemannian geodesic corrections
-├── gradients/                 # Free energy gradient engine
-│   ├── free_energy_clean.py   # VFE component computation
-│   ├── gradient_engine.py     # Full dF/dtheta for all parameters
-│   ├── gradient_terms.py      # Individual gradient terms
-│   └── softmax_grads.py       # Gradients through softmax weights
-├── math_utils/                # Mathematical primitives
-│   ├── generators.py          # SO(3)/GL(K) Lie algebra generators
-│   ├── transport.py           # Parallel transport Omega_ij = exp(phi_i)exp(-phi_j)
-│   ├── fisher_metric.py       # Fisher-Rao natural gradients
-│   └── push_pull.py           # Gaussian pushforward under transport
-├── meta/                      # Meta-agent emergence
-│   ├── emergence.py           # RG flow analyzer, spectral clustering
-│   ├── consensus.py           # Epistemic death detection
-│   └── gradient_adapter.py    # Multi-scale gradient bridging
-├── Docs/                      # Technical documentation and manuscripts
-│   ├── attention manuscript/  # JMLR attention paper (main theory)
-│   ├── gauge_ctm_derivation.tex
-│   └── references.bib
-├── Transformer Manuscript/    # Experimental results and figures
-├── tests/                     # Test suite
-├── config.py                  # System configuration
-├── simulation_config.py       # Experiment presets
-├── simulation_runner.py       # Multi-agent simulation orchestrator
-├── generate.py                # Text generation
-└── inference.py               # Model inference
+VFE-Transformer/
+├── transformer/                   # Gauge-theoretic transformer (~55k lines total)
+│   ├── core/                      # Core model components
+│   │   ├── model.py               #   GaugeTransformerLM (full language model)
+│   │   ├── attention.py           #   KL-divergence multi-head attention
+│   │   ├── blocks.py              #   Transformer block and stack
+│   │   ├── embeddings.py          #   Gauge token/positional embeddings
+│   │   ├── variational_ffn.py     #   VFE feedforward (VFE_dynamic, hamiltonian, pure_fep)
+│   │   ├── ffn.py                 #   Standard gauge FFN
+│   │   ├── prior_bank.py          #   Token-dependent prior bank for pure FEP
+│   │   ├── gauge_utils.py         #   Shared matrix exp and KL utilities
+│   │   └── sanitization.py        #   Numerical sanitization tracker
+│   ├── training/                  # Training infrastructure
+│   │   ├── config.py              #   TrainingConfig + preset configs
+│   │   ├── optimizer.py           #   Per-parameter-group optimizer creation
+│   │   └── metrics.py             #   Metrics tracking
+│   ├── analysis/                  # Analysis and metrics
+│   │   ├── rg_metrics.py          #   Renormalization group diagnostics
+│   │   ├── rg_flow_analysis.py    #   RG flow analysis
+│   │   ├── rg_flow_enhanced.py    #   Enhanced RG flow analysis
+│   │   ├── publication_metrics.py #   Publication-quality metrics
+│   │   ├── trajectory.py          #   Belief trajectory recording
+│   │   └── semantics.py           #   Semantic structure analysis
+│   ├── data/                      # Data loading
+│   │   └── datasets.py            #   WikiText-2/103, byte/char/BPE dataloaders
+│   ├── visualization/             # Plotting and visualization
+│   │   ├── training_plots.py      #   Training curve plots
+│   │   ├── trajectory_plots.py    #   Belief trajectory visualization
+│   │   ├── attention_viz.py       #   Attention pattern visualization
+│   │   ├── belief_space_viz.py    #   Belief space visualization
+│   │   └── ablation_plots.py      #   Ablation study plots
+│   ├── baselines/                 # Baseline models
+│   │   └── standard_transformer.py#   Standard dot-product attention transformer
+│   ├── experimental/              # Experimental code
+│   │   ├── fep_transformer.py     #   FEP transformer variant
+│   │   ├── hamiltonian_ffn.py     #   Hamiltonian (symplectic) FFN dynamics
+│   │   ├── pure_fep_transformer.py#   Pure FEP (backprop-free) transformer
+│   │   └── train_fep.py           #   FEP training scripts
+│   ├── utils/                     # Utilities
+│   │   ├── checkpoint.py          #   Model save/load, tokenizer access
+│   │   ├── evaluation.py          #   Evaluation utilities
+│   │   └── testing.py             #   Test utilities
+│   ├── train.py                   # Main training loop with full VFE loss
+│   ├── train_publication.py       # Publication-quality training script
+│   └── resume_training.py         # Resume training from checkpoint
+├── math_utils/                    # Mathematical primitives
+│   ├── generators.py              #   SO(3)/SO(N)/GL(K) Lie algebra generators
+│   ├── transport.py               #   Parallel transport Omega_ij = exp(phi_i)exp(-phi_j)
+│   ├── fisher_metric.py           #   Fisher-Rao natural gradients
+│   ├── push_pull.py               #   Gaussian pushforward under transport
+│   ├── sigma.py                   #   Covariance matrix utilities
+│   ├── numba_kernels.py           #   JIT-compiled transport kernels
+│   ├── cuda_kernels.py            #   CUDA kernel implementations
+│   └── transport_cache.py         #   Transport operator caching
+├── scripts/                       # Analysis and baseline scripts
+│   ├── analyze_rg_flow.py         #   RG flow analysis on trained models
+│   ├── kn5_baseline.py            #   KN-5 n-gram baseline comparison
+│   └── generate_publication_figures.py
+├── Attention/                     # Manuscript and data
+│   ├── GL(K)_attention.tex        #   Main JMLR paper
+│   ├── references.bib             #   Bibliography
+│   ├── Data/                      #   Experimental data
+│   └── figs/                      #   Figures
+├── tests/                         # Test suite (123 passing tests)
+│   └── transformer/
+│       ├── test_attention.py      #   KL attention, transport, aggregation
+│       ├── test_blocks.py         #   Transformer block and stack
+│       ├── test_cross_head_coupling.py  # Cross-head gauge coupling
+│       ├── test_embeddings.py     #   Gauge embeddings
+│       ├── test_model.py          #   Full model integration
+│       ├── test_training.py       #   Training config, optimizer, metrics
+│       ├── test_integration.py    #   End-to-end integration
+│       ├── test_imports.py        #   Import paths and sanitization
+│       └── test_data.py           #   Data loading
+├── generate.py                    # Text generation with attention visualization
+├── inference.py                   # Model inference and qualitative analysis
+└── transformer_test.py            # Quick model sanity check
 ```
 
 ## Architecture Details
@@ -252,9 +327,45 @@ where D_KL between Gaussians:
     + log(det(Omega_ij Sigma_j Omega_ij^T) / det(Sigma_i))
   ]
 
-Message aggregation:
+Message aggregation (GL(K) metric-corrected):
   m_i = sum_j beta_ij Omega_ij mu_j
+  S_i = sum_j beta_ij Omega_ij Sigma_j Omega_ij^T   [for GL(K)]
 ```
+
+### Gauge Groups
+
+| Gauge Group | Generators | Transport | Use Case |
+|---|---|---|---|
+| **SO(3)** | 3 skew-symmetric | Rotations in 3D | Minimal geometric model |
+| **SO(N)** | N(N-1)/2 skew-symmetric | Rotations in N-D | Intermediate complexity |
+| **GL(K)** | K^2 general | Full invertible transport | Maximum expressiveness |
+| **GL(d)^H** | H * d^2 block-diagonal | Per-head transport | Multi-head attention |
+
+### Covariance Modes
+
+| Mode | Storage | KL Cost | When to Use |
+|---|---|---|---|
+| **Full** | K x K per token | O(K^3) Cholesky | Small K, maximum expressiveness |
+| **Diagonal** | K per token | O(K) | Large K, memory-constrained |
+| **Shared** | Single K x K | O(K^3) amortized | Parameter-efficient |
+| **Gauge-fixed** | Rotated from base | O(K^3) | Enforce gauge covariance |
+
+### FFN Modes
+
+| Mode | Mechanism | Backprop? |
+|---|---|---|
+| **VFE_dynamic** | Iterative VFE minimization with natural gradients | Yes (outer loop) |
+| **hamiltonian** | Symplectic integration of Hamiltonian dynamics | Yes (outer loop) |
+| **pure_fep** | Prior evolution via p-flow (no weight updates) | No |
+| **standard** | Conventional MLP (for baseline comparison) | Yes |
+
+### Training Modes
+
+Three preset configurations via `transformer.training.config`:
+
+- **`get_standard_config()`** --- Standard transformer baseline (no gauge theory, single LR)
+- **`get_vfe_dynamic_config()`** --- Full gauge-theoretic VFE training with per-parameter-group LRs
+- **`get_pure_fep_config()`** --- Pure Free Energy Principle (backprop-free learning)
 
 ### Two-Timescale Learning
 
@@ -271,7 +382,7 @@ for step in range(belief_steps):
 prior_bank[target_v] <- (1 - prior_lr) * prior_bank[target_v] + prior_lr * avg_belief
 ```
 
-### Meta-Agent Emergence via Renormalization Group
+### Renormalization Group Analysis
 
 The VFE has self-similar structure: meta-agents satisfy the same definition as individual agents.
 
@@ -283,30 +394,42 @@ Scale zeta=1:   Meta-agents q_A = N(mu_A, Sigma_A) interact via beta'_AB
 Scale zeta=2:   Super-meta-agents ...
 ```
 
-Detected via spectral clustering on the attention matrix with metrics: modularity Q(beta), effective rank, intra/inter-cluster KL divergence.
+Detected via spectral clustering on the attention matrix with metrics: modularity Q(beta), effective rank, intra/inter-cluster KL divergence. See `scripts/analyze_rg_flow.py` for analysis tooling.
 
 ## Numerical Stability
 
-Key fixes enabling large gauge groups (see `NUMERICAL_STABILITY.md`):
+Key design decisions for stable training with large gauge groups:
 
 - **sqrt(K) attention scaling**: `logits = -KL / (kappa * sqrt(K))` prevents softmax saturation
-- **Dimension-dependent KL clamping**: ceiling of `max(100, 5K)`
-- **Per-parameter gradient clipping**: Independent budget per parameter group (mu, Sigma, phi)
-- **Loss sqrt(K) normalization**: `loss = F / sqrt(K)` for hyperparameter transferability
+- **Log-space sigma clamping**: Clamp `log_sigma` before `exp()` to preserve gradients at boundaries (not post-exp clamping which kills gradients)
+- **Logdet clamping**: `log(diag(L).clamp(min=eps))` not `log(diag(L) + eps)` prevents negative log-determinants
+- **KL ceiling**: Fixed ceiling of 100.0 per element prevents divergence
+- **Per-parameter gradient clipping**: Independent budget per parameter group (mu, sigma, phi, ffn)
 - **GL(K) transport**: No re-orthogonalization needed (only invertibility required)
+- **Float64 upcasting**: Matrix exponentials upcast to float64 for K >= 8 to prevent Pade overflow
+- **Cholesky with jitter escalation**: Progressive jitter (1e-6 to 1e-1) with eigenvalue fallback
+- **Sanitization tracking**: All numerical interventions (clamping, fallbacks, NaN replacement) are counted and reported via `transformer.core.sanitization.san`
 
 ## Testing
 
 ```bash
+# Run all tests
 pytest tests/
-pytest tests/ -v -k "transformer"
-pytest tests/ --tb=short
+
+# Run specific test modules
+pytest tests/transformer/test_attention.py -v
+pytest tests/transformer/test_cross_head_coupling.py -v
+pytest tests/transformer/test_model.py -v
+
+# Run by marker
+pytest tests/ -m "not slow"
 ```
+
+123 tests covering: KL attention, transport operators, message aggregation, GL(K) metric correction, transformer blocks, gauge embeddings, cross-head coupling, model integration, training config, optimizer creation, and import paths.
 
 ## Documentation
 
-- `Docs/attention manuscript/` --- Main manuscript with complete theory and proofs
-- `NUMERICAL_STABILITY.md` --- Numerical stability guide for large K
+- `Attention/GL(K)_attention.tex` --- Main JMLR manuscript with complete theory and proofs
 - `transformer/PURE_FEP_TRANSFORMER_OVERVIEW.md` --- Pure FEP architecture overview
 - `claude.md` --- Architecture overview and code standards
 
