@@ -55,7 +55,7 @@ def minimal_config():
         'max_seq_len': 32,
         'kappa_beta': 1.0,
         'dropout': 0.0,
-        'pos_encoding_mode': 'learned',
+
         'evolve_sigma': True,
         'evolve_phi': False,
         'tie_embeddings': True,
@@ -76,7 +76,7 @@ def small_config():
         'max_seq_len': 64,
         'kappa_beta': 1.0,
         'dropout': 0.1,
-        'pos_encoding_mode': 'learned',
+
         'evolve_sigma': True,
         'evolve_phi': True,
         'tie_embeddings': True,
@@ -96,7 +96,7 @@ def vfe_config():
         'max_seq_len': 32,
         'kappa_beta': 1.0,
         'dropout': 0.0,
-        'pos_encoding_mode': 'learned',
+
         'evolve_sigma': True,
         'evolve_phi': True,
         'tie_embeddings': True,

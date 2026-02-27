@@ -22,10 +22,7 @@
     "evolve_phi": true,
     "evolve_phi_e_step": true,
     "diagonal_covariance": false,
-    "use_positional_embedding": false,
-    "pos_encoding_mode": "none",
     "use_identity_transport": false,
-    "alibi_slope": null,
     "kappa_beta": 1.0,
     "mu_init_std": 1.0,
     "mu_normalize": false,
@@ -71,7 +68,6 @@
     "per_head_kappa": false,
     "use_output_projection": true,
     "multihead_vfe": false,
-    "pos_encoding_scale": 0.3,
     "use_prior_bank": true,
     "dataset": "wikitext-103"
   },

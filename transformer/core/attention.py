@@ -248,8 +248,6 @@ def compute_attention_weights(
     # Memory-efficient options
     irrep_dims: Optional[List[int]] = None,  # Block-diagonal structure [d₁, d₂, ...] for principled KL decomposition
     chunk_size: Optional[int] = None,  # Chunk size for memory-efficient computation (None = auto)
-    # ALiBi-style positional bias (NEW!)
-    alibi_slope: Optional[float] = None,  # If set, adds slope * (i-j) to logits for relative position
     # Identity transport mode (diagnostic/simplification)
     use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
     # Self-attention masking (prevents attention collapse)
@@ -292,13 +290,6 @@ def compute_attention_weights(
         chunk_size: Optional chunk size for memory-efficient processing.
                    When provided, processes N×N attention in C×C chunks.
                    None = no chunking (fast but memory-hungry)
-        alibi_slope: Optional ALiBi-style positional bias slope.
-                    When set, adds slope * (i - j) to attention logits.
-                    Negative values favor recent tokens (recency bias).
-                    Unlike positional embeddings in μ or φ, this doesn't
-                    affect transport Ω_ij, keeping attention content-based
-                    while adding controlled positional information.
-                    Typical values: -0.1 to -0.01 (for recency bias)
         use_identity_transport: If True, bypass gauge transport entirely.
                                Sets Ω_ij = I for all pairs, computing raw
                                KL(q_i || q_j) without any rotation.
@@ -406,23 +397,6 @@ def compute_attention_weights(
 
     # Attention logits: -KL / (κ · √K)
     logits = -kl_matrix / (kappa * dim_scale)  # (B, N, N)
-
-    # ==========================================================================
-    # ALiBi-STYLE POSITIONAL BIAS: Add relative position information
-    # Unlike positional embeddings in μ or φ, this doesn't affect transport Ω_ij.
-    # The bias is purely additive: logits[i,j] += slope * (i - j)
-    # Negative slope encourages attending to recent tokens (recency bias).
-    # This provides explicit, controlled positional information while keeping
-    # the gauge transport purely content-based.
-    # ==========================================================================
-    if alibi_slope is not None and alibi_slope != 0.0:
-        B, N, _ = logits.shape
-        positions = torch.arange(N, device=logits.device, dtype=logits.dtype)
-        # rel_pos[i, j] = i - j (positive for future, negative for past)
-        rel_pos = positions[:, None] - positions[None, :]  # (N, N)
-        # Apply slope (typically negative to favor recent tokens)
-        alibi_bias = alibi_slope * rel_pos  # (N, N)
-        logits = logits + alibi_bias.unsqueeze(0)  # (B, N, N)
 
     # Apply causal mask if provided (BEFORE self-attention masking)
     if mask is not None:
@@ -2006,7 +1980,6 @@ class IrrepMultiHeadAttention(nn.Module):
         gauge_group: str = 'SO3',  # 'SO3' or 'SON'
         gauge_dim: int = 3,        # N for SO(N) - only used when gauge_group='SON'
         global_generators: Optional[torch.Tensor] = None,  # (n_gen, K, K) for SO(N) mode
-        alibi_slope: Optional[float] = None,  # ALiBi-style positional bias (negative = recency bias)
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
         enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
@@ -2050,7 +2023,6 @@ class IrrepMultiHeadAttention(nn.Module):
         self.aggregate_mode = aggregate_mode
         self.attention_pattern = attention_pattern
         self.attention_window = attention_window
-        self.alibi_slope = alibi_slope
         self.use_identity_transport = use_identity_transport
         self.mask_self_attention = mask_self_attention
         self.enforce_orthogonal = enforce_orthogonal
@@ -2344,7 +2316,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     return_kl=True,
                     diagonal_covariance=self.diagonal_covariance,
                     cached_transport=head_cached_transport,
-                    alibi_slope=self.alibi_slope,
+
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
@@ -2364,7 +2336,7 @@ class IrrepMultiHeadAttention(nn.Module):
                     return_kl=False,
                     diagonal_covariance=self.diagonal_covariance,
                     cached_transport=head_cached_transport,
-                    alibi_slope=self.alibi_slope,
+
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,

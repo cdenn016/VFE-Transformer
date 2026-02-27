@@ -109,8 +109,6 @@ class GaugeTransformerBlock(nn.Module):
         use_layernorm: bool = False,  # Pure VFE: beliefs evolve freely, no normalization
         use_dropout: bool = False,    # Pure VFE: uncertainty lives in Σ, not random masking
         use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
-        # ALiBi-style positional bias
-        alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
         # Identity transport mode
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         # Self-attention masking (prevents attention collapse)
@@ -220,7 +218,6 @@ class GaugeTransformerBlock(nn.Module):
             gauge_group=gauge_group,
             gauge_dim=gauge_dim_inferred,
             global_generators=generators,  # Pass for SO(N) mode
-            alibi_slope=alibi_slope,
             use_identity_transport=use_identity_transport,
             mask_self_attention=mask_self_attention,
             enforce_orthogonal=enforce_orthogonal,
@@ -463,8 +460,6 @@ class GaugeTransformerStack(nn.Module):
         use_layernorm: bool = False,  # Pure VFE: beliefs evolve freely, no normalization
         use_dropout: bool = False,    # Pure VFE: uncertainty lives in Σ, not random masking
         use_residual: bool = False,   # Pure VFE: FFN outputs final belief, not delta
-        # ALiBi-style positional bias
-        alibi_slope: Optional[float] = None,  # If set, adds slope*(i-j) to attention logits
         # Identity transport mode
         use_identity_transport: bool = False,  # If True, Ω_ij = I (no gauge transport)
         # Self-attention masking (prevents attention collapse)
@@ -562,8 +557,6 @@ class GaugeTransformerStack(nn.Module):
                 use_layernorm=use_layernorm,
                 use_dropout=use_dropout,
                 use_residual=use_residual,
-                # ALiBi positional bias
-                alibi_slope=alibi_slope,
                 # Identity transport
                 use_identity_transport=use_identity_transport,
                 # Self-attention masking

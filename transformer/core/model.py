@@ -5,8 +5,7 @@ Complete Gauge-Theoretic Language Model (0D Architecture)
 Full transformer language model using gauge theory and active inference.
 
 Architecture:
-    Token Embedding → Position Encoding →
-    N × Transformer Blocks → Output Projection
+    Token Embedding → N × Transformer Blocks → Output Projection
 
 Key Innovation: Attention via KL divergence on statistical manifold,
                 no learned W_Q, W_K matrices!
@@ -31,7 +30,7 @@ from typing import Optional, Tuple, Dict, List, Union
 import numpy as np
 
 # Import our components
-from transformer.core.embeddings import GaugeTokenEmbedding, GaugePositionalEncoding
+from transformer.core.embeddings import GaugeTokenEmbedding
 from transformer.core.blocks import GaugeTransformerStack
 from transformer.core.attention import create_attention_mask
 
@@ -71,9 +70,8 @@ class GaugeTransformerLM(nn.Module):
 
     Components:
         1. GaugeTokenEmbedding: Maps tokens to beliefs
-        2. GaugePositionalEncoding: Agent-index encoding in so(3)
-        3. GaugeTransformerStack: N layers of gauge attention
-        4. Output projection: μ → logits over vocabulary
+        2. GaugeTransformerStack: N layers of gauge attention
+        3. Output projection: μ → logits over vocabulary
 
     0D Structure:
         - All N tokens → N agents at single point c*
@@ -95,7 +93,6 @@ class GaugeTransformerLM(nn.Module):
                 - max_seq_len: Maximum sequence length
                 - kappa_beta: Attention temperature
                 - dropout: Dropout probability
-                - pos_encoding_mode: 'learned' or 'sinusoidal'
                 - evolve_sigma: If True, evolve covariances
                 - evolve_phi: If True, evolve gauge frames
                 - tie_embeddings: If True, tie input/output embeddings
@@ -112,7 +109,6 @@ class GaugeTransformerLM(nn.Module):
         max_seq_len = config['max_seq_len']
         kappa_beta = config['kappa_beta']
         dropout = config.get('dropout', 0.1)
-        pos_mode = config.get('pos_encoding_mode', 'none')  # Default: no position in gauge space
         evolve_sigma = config.get('evolve_sigma', True)
         evolve_phi = config.get('evolve_phi', True)
         evolve_phi_e_step = config.get('evolve_phi_e_step', False)  # Update φ during E-step iterations
@@ -157,17 +153,6 @@ class GaugeTransformerLM(nn.Module):
         # Diagonal covariance mode (memory optimization)
         diagonal_covariance = config.get('diagonal_covariance', False)
         self.diagonal_covariance = diagonal_covariance
-
-        # Positional embedding added to μ (like standard transformers)
-        # DEFAULT: True - position in μ, not gauge frame φ. 
-        use_positional_embedding = config.get('use_positional_embedding', False)
-
-        # Position encoding scale (for φ gauge frame encoding)
-        pos_encoding_scale = config.get('pos_encoding_scale', 0.1)
-
-        # ALiBi-style positional bias (adds slope*(i-j) to attention logits)
-        # Negative values create recency bias (attend more to nearby tokens)
-        alibi_slope = config.get('alibi_slope', None)
 
         # Identity transport mode: Ω_ij = I for all pairs (bypasses gauge transport)
         # This is now primarily controlled by gauge_mode='trivial' for principled use.
@@ -350,34 +335,11 @@ class GaugeTransformerLM(nn.Module):
             generators=self.generators,  # Always pass generators for gauge transport
             diagonal_covariance=diagonal_covariance,
             max_seq_len=max_seq_len,
-            use_positional_embedding=use_positional_embedding,
             phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
             phi_scale=config.get('phi_scale', 0.3),  # Gauge frame init scale (higher for clustering)
             # Mean embedding normalization options
             mu_normalize=config.get('mu_normalize', False),
             mu_max_norm=config.get('mu_max_norm', None),
-        )
-
-        # =================================================================
-        # Position Encoding for φ (Gauge Frame) - RELATIVE POSITION
-        # =================================================================
-        # PRINCIPLED DESIGN: Position encodes RELATIVE frame differences.
-        # - φ (gauge frame) = φ_token + φ_pos(i) encodes token type + position
-        # - μ (belief mean) = pure semantic content (NO position)
-        # - Transport Ω_ij = exp(φ_i·G)·exp(-φ_j·G) encodes RELATIVE position
-        #
-        # This gives shift-invariant attention: tokens 3 apart always have
-        # the same transport relationship, regardless of absolute position.
-        #
-        # Key insight: KL(q_i || Ω_ij[q_j]) depends on relative position
-        # (through transport), not absolute position (which would bias
-        # attention toward nearby tokens regardless of content).
-        self.pos_encoding = GaugePositionalEncoding(
-            max_seq_len=max_seq_len,
-            mode=pos_mode,
-            scale=pos_encoding_scale,
-            phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
-            generators=self.generators,  # Pass generators for SO(N) BCH composition
         )
 
         # =================================================================
@@ -444,8 +406,6 @@ class GaugeTransformerLM(nn.Module):
             use_layernorm=config.get('use_layernorm', True),
             use_dropout=config.get('use_dropout', True),
             use_residual=config.get('use_residual', True),
-            # ALiBi positional bias
-            alibi_slope=alibi_slope,
             # Identity transport mode
             use_identity_transport=use_identity_transport,
             # Self-attention masking (prevents attention collapse)
@@ -592,13 +552,6 @@ class GaugeTransformerLM(nn.Module):
         # This is the correct VFE setup: prior = semantic, belief = contextualized.
         mu_prior = mu_q.clone()
 
-        # =================================================================
-        # 3. Position Encoding - Compose with token phi
-        # =================================================================
-        # Position encoding adds position-dependent gauge rotation to token phi.
-        # This gives each position a unique frame even for identical tokens.
-        phi = self.pos_encoding.compose(phi, num_agents, device=device)
-
         # Record embeddings for trajectory tracking
         if recorder is not None and recorder.enabled:
             recorder.record_embeddings(mu_q, sigma_q, phi)
@@ -721,9 +674,6 @@ class GaugeTransformerLM(nn.Module):
         mu_prior = mu_q.clone()
         sigma_prior = sigma_q.clone() if sigma_q is not None else None
         phi_prior = phi.clone()
-
-        # Position encoding - compose token phi with positional phi
-        phi = self.pos_encoding.compose(phi, num_agents, device=device)
 
         # Attention mask (causal + optional sparsity)
         mask = create_attention_mask(
@@ -872,9 +822,6 @@ class GaugeTransformerLM(nn.Module):
                     sigma_q = sigma_q[:, :, perm][:, :, :, perm]
 
         mu_prior = mu_q.clone()
-
-        # Position encoding
-        phi = self.pos_encoding.compose(phi, num_agents, device=device)
 
         # Attention mask
         mask = create_attention_mask(
@@ -1177,7 +1124,6 @@ if __name__ == '__main__':
         'max_seq_len': 16,
         'kappa_beta': 1.0,
         'dropout': 0.1,
-        'pos_encoding_mode': 'learned',
         'evolve_sigma': False,
         'evolve_phi': False,
         'tie_embeddings': True,

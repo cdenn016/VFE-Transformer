@@ -334,7 +334,6 @@ def resume_training():
         'n_heads': 1,
         'hidden_dim': config.get('embed_dim', 128) * 4,
         'ffn_mode': 'VFE_dynamic',
-        'pos_encoding_mode': 'learned',
         'diagonal_covariance': True,
         'use_diagonal_covariance': True,
         'evolve_sigma': True,

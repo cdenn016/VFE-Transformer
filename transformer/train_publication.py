@@ -144,14 +144,12 @@ STANDARD_CONFIG = {
     # Standard transformer settings
     'ffn_mode': 'standard',        # Learned MLP (NOT VFE)
     'attention_type': 'standard', # Dot-product attention (NOT KL)
-    'pos_encoding_mode': 'learned',
     'tie_embeddings': True,
 
     # Disable gauge features (not used in standard mode)
     'evolve_sigma': False,
     'evolve_phi': False,
     'diagonal_covariance': True,
-    'use_positional_embedding': True,
 
     # Learning rates (standard Adam rates)
     'mu_lr': 3e-4,              #1e-3 - 1e-4 or it wont work well
@@ -237,10 +235,7 @@ VFE_EM_CONFIG = {
                                   # When True: φ evolves via ∂F/∂φ at each VFE iteration
                                   # When False: φ only updated via backprop (M-step)
     'diagonal_covariance': False,
-    'use_positional_embedding': False,
-    'pos_encoding_mode': 'none',
     'use_identity_transport': False,
-    'alibi_slope': None,
 
     # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
     'kappa_beta': 2,
@@ -364,7 +359,6 @@ VFE_EM_CONFIG = {
     'multihead_vfe': False,          # Maintain per-head β_h through VFE iterations
 
 
-    'pos_encoding_scale': 0.3,
     'use_prior_bank': True,
 
 }
@@ -413,11 +407,7 @@ PURE_FEP_CONFIG = {
     'evolve_phi_e_step': False,   # Update φ during E-step iterations (dynamical gauge frames)
     'diagonal_covariance': True,
 
-    # NO position encoding (let it emerge from data!)
-    'use_positional_embedding': False,
-    'pos_encoding_mode': 'none',
     'use_identity_transport': False,
-    'alibi_slope': None,
 
     # Temperature: κ is a scalar sharpness dial; dimension scaling (√K) is hardcoded in attention
     'kappa_beta': 0.25,
@@ -502,7 +492,6 @@ PURE_FEP_CONFIG = {
     # Attention
     'attention_pattern': 'full',
     'attention_window': 24,
-    'pos_encoding_scale': 0.3,
     'use_prior_bank': True,       # Token-dependent priors
 
     # PURE FEP MODE FLAGS
