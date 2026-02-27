@@ -215,9 +215,7 @@ VFE_EM_CONFIG = {
 
     # Training
     'batch_size': 32,
-    'use_amp': False,             # FP32 for precision
     'num_workers': 6,
-    'epochs': None,               # Set to 1-3 for WikiText-2, None for WikiText-103 (use max_steps)
     'max_steps': 50000,          # ~0.5 epochs on WikiText-103
     'warmup_steps': 100,
 
@@ -388,9 +386,7 @@ PURE_FEP_CONFIG = {
 
     # Training
     'batch_size': 6,
-    'use_amp': False,             # FP32 for precision
     'num_workers': 4,
-    'epochs': None,               # Set for WikiText-2, None for WikiText-103 (use max_steps)
     'max_steps': 5000,            # For quick pure FEP experiments
     'warmup_steps': 0,            # No warmup for P-flow
 
@@ -1008,7 +1004,7 @@ class PublicationTrainer(FastTrainer):
         self.model.train()
 
     def train_step(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Train step with comprehensive metrics and AMP support."""
+        """Train step with comprehensive metrics."""
         self.model.train()
 
         input_ids, target_ids = batch
@@ -1032,60 +1028,34 @@ class PublicationTrainer(FastTrainer):
         if use_delta_rule and hasattr(self.model, 'out_proj'):
             self.model.out_proj.weight.requires_grad = False
 
-        # Forward pass with full metrics (with optional AMP)
-        if self.scaler is not None:
-            # Mixed precision forward pass
-            with torch.amp.autocast('cuda'):
-                if is_standard:
-                    # Standard transformer: simple cross-entropy loss
-                    output = self.model(input_ids, labels=target_ids)
-                    loss = output['loss']
-                    full_metrics = {
-                        'loss/total': loss.item(),
-                        'loss/ce': loss.item(),
-                    }
-                else:
-                    loss, full_metrics = compute_free_energy_loss(
-                        self.model,
-                        input_ids,
-                        target_ids,
-                        alpha=self.config.alpha,
-                        lambda_beta=self.config.beta,
-                        lambda_gamma=self.config.lambda_gamma,
-                        kappa_gamma=self.config.kappa_gamma,
-
-                    )
-            # Scaled backward
-            self.scaler.scale(loss).backward()
+        # Forward pass with full metrics
+        if is_standard:
+            # Standard transformer: simple cross-entropy loss
+            output = self.model(input_ids, labels=target_ids)
+            loss = output['loss']
+            full_metrics = {
+                'loss/total': loss.item(),
+                'loss/ce': loss.item(),
+            }
         else:
-            # Standard forward pass
-            if is_standard:
-                # Standard transformer: simple cross-entropy loss
-                output = self.model(input_ids, labels=target_ids)
-                loss = output['loss']
-                full_metrics = {
-                    'loss/total': loss.item(),
-                    'loss/ce': loss.item(),
-                }
-            else:
-                loss, full_metrics = compute_free_energy_loss(
-                    self.model,
-                    input_ids,
-                    target_ids,
-                    alpha=self.config.alpha,
-                    lambda_beta=self.config.beta,
-                    lambda_gamma=self.config.lambda_gamma,
-                    kappa_gamma=self.config.kappa_gamma,
+            loss, full_metrics = compute_free_energy_loss(
+                self.model,
+                input_ids,
+                target_ids,
+                alpha=self.config.alpha,
+                lambda_beta=self.config.beta,
+                lambda_gamma=self.config.lambda_gamma,
+                kappa_gamma=self.config.kappa_gamma,
 
-                )
-            loss.backward()
+            )
+        loss.backward()
 
         # Compute gradient norms BEFORE clipping
         # Check if this is a log step (need to check global_step here)
         is_log_step = (self.global_step + 1) % self.config.log_interval == 0
         grad_norms = self._compute_gradient_norms() if is_log_step else None
 
-        # Clip and step (with scaler if AMP enabled)
+        # Clip and step
         # Per-group clipping for large gauge groups (SO(N>3)):
         # phi_embed gradients dominate global norm, starving mu/sigma.
         # FastTrainingConfig always uses param groups; TrainingConfig has use_param_groups flag.
@@ -1103,38 +1073,20 @@ class PublicationTrainer(FastTrainer):
                 return _phi_clip
             return self.config.grad_clip
 
-        if self.scaler is not None:
-            if self.config.grad_clip > 0:
-                self.scaler.unscale_(self.optimizer)
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                _clip_value(group),
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            if self.config.grad_clip > 0:
-                if _use_param_groups:
-                    for group in self.optimizer.param_groups:
-                        if group['params']:
-                            torch.nn.utils.clip_grad_norm_(
-                                group['params'],
-                                _clip_value(group),
-                            )
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
-            self.optimizer.step()
+        if self.config.grad_clip > 0:
+            if _use_param_groups:
+                for group in self.optimizer.param_groups:
+                    if group['params']:
+                        torch.nn.utils.clip_grad_norm_(
+                            group['params'],
+                            _clip_value(group),
+                        )
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config.grad_clip,
+                )
+        self.optimizer.step()
 
         if self.scheduler is not None:
             self.scheduler.step()
