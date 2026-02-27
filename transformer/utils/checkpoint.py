@@ -103,7 +103,6 @@ def load_model(checkpoint_path: str) -> Tuple[GaugeTransformerLM, Dict[str, Any]
         'max_seq_len': 128,
         'kappa_beta': 1.0,
         'dropout': 0.1,
-        'pos_encoding_mode': 'learned',
         'evolve_sigma': True,
         'evolve_phi': False,
         'tie_embeddings': True,

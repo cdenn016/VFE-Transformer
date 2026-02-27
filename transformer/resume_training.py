@@ -334,7 +334,6 @@ def resume_training():
         'n_heads': 1,
         'hidden_dim': config.get('embed_dim', 128) * 4,
         'ffn_mode': 'VFE_dynamic',
-        'pos_encoding_mode': 'learned',
         'diagonal_covariance': True,
         'use_diagonal_covariance': True,
         'evolve_sigma': True,
@@ -342,7 +341,6 @@ def resume_training():
         'tie_embeddings': True,
         'gauge_group': 'SO3',
         'gauge_dim': 3,
-        'use_multi_irrep': False,
     }
     for key, default in model_defaults.items():
         if key not in config:

@@ -61,12 +61,8 @@ class TestCoreImports:
 
     def test_core_embeddings_import(self):
         """Test importing from transformer.core.embeddings."""
-        from transformer.core.embeddings import (
-            GaugeTokenEmbedding,
-            GaugePositionalEncoding,
-        )
+        from transformer.core.embeddings import GaugeTokenEmbedding
         assert GaugeTokenEmbedding is not None
-        assert GaugePositionalEncoding is not None
 
     def test_core_ffn_import(self):
         """Test importing from transformer.core.ffn."""

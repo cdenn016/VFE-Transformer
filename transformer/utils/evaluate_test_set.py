@@ -183,7 +183,6 @@ def evaluate_on_test(
         'hidden_dim': get_config_val(config, 'hidden_dim', embed_dim * 4),
         'kappa_beta': get_config_val(config, 'kappa_beta', 1.0),
         'epsilon': get_config_val(config, 'epsilon', 1e-8),
-        'pos_encoding_mode': get_config_val(config, 'pos_encoding_mode', 'none'),
         'evolve_sigma': get_config_val(config, 'evolve_sigma', False),
         'evolve_phi': get_config_val(config, 'evolve_phi', False),
         'tie_embeddings': get_config_val(config, 'tie_embeddings', False),

@@ -33,17 +33,12 @@ def diagnose():
         # The "fixes" that should help
         'mask_self_attention': True,
         'evolve_sigma': True,
-        'alibi_slope': None,
-        'gauge_fixed_priors': False,  # THIS IS THE ISSUE!
-
-        # Disable other position sources for clarity
-        'use_positional_embedding': False,
-        'pos_encoding_mode': 'none',
-        'use_identity_transport': False,  # Use actual transport
+        'gauge_fixed_priors': False,
+        'use_identity_transport': False,
     }
 
     print("\n[CONFIG]")
-    for k in ['mask_self_attention', 'evolve_sigma', 'alibi_slope',
+    for k in ['mask_self_attention', 'evolve_sigma',
               'gauge_fixed_priors', 'use_identity_transport', 'kappa_beta']:
         print(f"  {k}: {config.get(k)}")
 
