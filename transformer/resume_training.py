@@ -29,8 +29,7 @@ from pathlib import Path
 from transformer.core.model import GaugeTransformerLM
 from transformer.baselines.standard_transformer import StandardTransformerLM
 from transformer.data import create_dataloaders, create_char_dataloaders
-from transformer._archive.train_fast import FastTrainingConfig
-from transformer.train_publication import run_test_evaluation, PublicationTrainer
+from transformer.train_publication import FastTrainingConfig, run_test_evaluation, PublicationTrainer
 from transformer.analysis.publication_metrics import PublicationMetrics
 
 
