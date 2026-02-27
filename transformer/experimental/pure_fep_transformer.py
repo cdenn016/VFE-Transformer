@@ -92,10 +92,17 @@ from transformer.core.variational_ffn import (
     compute_vfe_gradients_gpu,
     compute_natural_gradient_gpu,
 )
-from transformer.core.embeddings import (
-    GaugePositionalEncoding,
-    so3_compose_bch,
-)
+from transformer.core.embeddings import GaugeTokenEmbedding  # noqa: F401
+
+
+def so3_compose_bch(X: torch.Tensor, Y: torch.Tensor, order: int = 1) -> torch.Tensor:
+    """BCH composition in so(3): X ⊕ Y ≈ X + Y + [X,Y]/2 + ..."""
+    result = X + Y
+    if order >= 2 and X.shape[-1] == 3:
+        # [X, Y] for so(3) is the cross product
+        bracket = torch.cross(X, Y, dim=-1)
+        result = result + 0.5 * bracket
+    return result
 from math_utils.generators import (
     generate_so3_generators,
     generate_multi_irrep_generators,
