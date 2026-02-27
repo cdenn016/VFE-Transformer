@@ -323,7 +323,6 @@ class GaugeTransformerLM(nn.Module):
             gauge_fixed_priors=gauge_fixed_priors,
             generators=self.generators,  # Always pass generators for gauge transport
             diagonal_covariance=diagonal_covariance,
-            max_seq_len=max_seq_len,
             phi_dim=self.phi_dim,  # SO(3): 3, SO(N): N(N-1)/2
             phi_scale=config.get('phi_scale', 0.3),  # Gauge frame init scale (higher for clustering)
             # Mean embedding normalization options
