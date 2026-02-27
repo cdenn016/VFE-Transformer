@@ -57,6 +57,7 @@ Date: December 2025
 """
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import argparse
 import json
@@ -65,9 +66,10 @@ import time
 import math
 import subprocess
 import platform
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any
 
 
 from transformer.core.model import GaugeTransformerLM
@@ -78,7 +80,6 @@ from transformer.train import (
     compute_rg_metrics_from_attention,
     compute_dynamic_rg_metrics,
 )
-from transformer._archive.train_fast import FastTrainer, FastTrainingConfig
 from transformer.analysis.publication_metrics import PublicationMetrics, ExperimentResult
 
 # Import the principled PureFEPTransformer (KL-to-prior output, no backprop)
@@ -86,6 +87,80 @@ from transformer.experimental.pure_fep_transformer import (
     PureFEPTransformer,
     PureFEPConfig as PureFEPTransformerConfig,
 )
+
+
+# =============================================================================
+# Training Configuration (previously in _archive/train_fast.py)
+# =============================================================================
+
+@dataclass
+class FastTrainingConfig:
+    """Training configuration for publication trainer."""
+
+    # Steps
+    max_steps: int = 50000
+    warmup_steps: int = 1000
+
+    # Learning rates (multi-group, always used)
+    mu_lr: float = 0.1
+    sigma_lr: float = 0.005
+    phi_lr: float = 0.01
+    attention_lr: float = 0.01
+    ffn_lr: float = 0.001
+    output_lr: float = 0.001
+
+    # Optimizer
+    weight_decay: float = 0.01
+    grad_clip: float = 1.0
+    phi_grad_clip: float = 0.1
+    beta1: float = 0.9
+    beta2: float = 0.95
+    eps: float = 1e-8
+
+    # Free energy weights
+    alpha: float = 0.1
+    beta: float = 1.0          # Belief alignment (lambda_beta)
+    lambda_gamma: float = 0.0  # Model alignment
+    kappa_gamma: float = 1.0   # Temperature for gamma coupling
+
+    # Logging
+    log_interval: int = 10
+    eval_interval: int = 100
+    checkpoint_interval: int = 500
+
+    # Infrastructure
+    use_wandb: bool = False
+    checkpoint_dir: Optional[Path] = None
+
+    # P-flow: EMA update of token embeddings toward successful beliefs
+    use_p_flow: bool = False
+    p_flow_ema_decay: float = 0.99
+
+    # Delta rule: backprop-free learning for W_out
+    use_delta_rule_w_out: bool = False
+    delta_rule_lr: float = 0.001
+
+    # RG metrics
+    compute_rg_metrics: bool = False
+    rg_metrics_interval: int = 100
+    rg_auto_cluster: bool = True
+    rg_n_clusters: Optional[int] = None
+    track_dynamic_rg: bool = False
+
+    # Model info (for head label diagnostics)
+    irrep_spec: Optional[list] = None
+
+    # Always True for publication trainer
+    use_param_groups: bool = True
+
+    # LR schedule
+    lr_decay: str = 'cosine'
+    min_lr: float = 3e-5
+    learning_rate: float = 3e-4  # Fallback for scheduler
+
+    def __post_init__(self):
+        if isinstance(self.checkpoint_dir, str):
+            self.checkpoint_dir = Path(self.checkpoint_dir)
 
 
 # ============================================================================
@@ -868,11 +943,44 @@ class PublicationMetricsTracker:
             writer.writerows(self.history)
 
 
-class PublicationTrainer(FastTrainer):
+class PublicationTrainer:
     """Enhanced trainer with publication-quality metrics."""
 
-    def __init__(self, *args, publication_metrics: PublicationMetrics = None, tokenizer=None, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, model, train_loader, val_loader=None, config=None,
+                 device=None, publication_metrics: PublicationMetrics = None,
+                 tokenizer=None):
+        self.model = model
+        self.train_loader = train_loader
+        self.val_loader = val_loader
+        self.config = config or FastTrainingConfig()
+
+        # Device
+        if device is not None:
+            self.device = torch.device(device) if isinstance(device, str) else device
+        else:
+            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = self.model.to(self.device)
+
+        # Pad token for loss masking
+        self.pad_token_id = getattr(train_loader.dataset, 'pad_token_id', -100)
+
+        # Optimizer and scheduler
+        self.optimizer = self._create_optimizer()
+        self.scheduler = self._create_scheduler()
+
+        # Training state
+        self.global_step = 0
+        self.best_val_ce = float('inf')
+
+        # Checkpoint directory
+        if self.config.checkpoint_dir is not None:
+            self.config.checkpoint_dir = Path(self.config.checkpoint_dir)
+            self.config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        print("PublicationTrainer initialized")
+        print(f"  Device: {self.device}")
+        print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+        print(f"  Max steps: {self.config.max_steps:,}")
 
         # Basic CSV metrics tracker
         metrics_path = self.config.checkpoint_dir / 'metrics.csv'
@@ -889,6 +997,147 @@ class PublicationTrainer(FastTrainer):
 
         # Track attention visualization count
         self._attention_viz_count = 0
+
+    # =========================================================================
+    # Optimizer & Scheduler (inlined from base trainer)
+    # =========================================================================
+
+    def _create_optimizer(self) -> torch.optim.Optimizer:
+        """Create AdamW optimizer with per-parameter-group learning rates."""
+        mu_params, sigma_params, phi_params = [], [], []
+        attention_params, ffn_params, output_params = [], [], []
+
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if 'mu_embed' in name:
+                mu_params.append(param)
+            elif 'sigma_embed' in name or 'log_sigma' in name:
+                sigma_params.append(param)
+            elif 'phi_embed' in name:
+                phi_params.append(param)
+            elif 'attention' in name or 'attn' in name:
+                attention_params.append(param)
+            elif 'out_proj' in name:
+                output_params.append(param)
+            else:
+                ffn_params.append(param)
+
+        param_groups = []
+        group_defs = [
+            (mu_params, self.config.mu_lr, 0.0, 'mu_embed'),
+            (sigma_params, self.config.sigma_lr, 0.0, 'sigma_embed'),
+            (phi_params, self.config.phi_lr, 0.0, 'phi_embed'),
+            (attention_params, self.config.attention_lr, self.config.weight_decay, 'attention'),
+            (ffn_params, self.config.ffn_lr, self.config.weight_decay, 'ffn'),
+            (output_params, self.config.output_lr, 0.0, 'output'),
+        ]
+        for params, lr, wd, name in group_defs:
+            if params:
+                param_groups.append({'params': params, 'lr': lr, 'weight_decay': wd, 'name': name})
+                print(f"  Parameter group '{name}': {len(params)} tensors @ lr={lr}")
+
+        return torch.optim.AdamW(
+            param_groups,
+            betas=(self.config.beta1, self.config.beta2),
+            eps=self.config.eps,
+        )
+
+    def _create_scheduler(self):
+        """Create cosine LR scheduler with warmup."""
+        if self.config.lr_decay == 'constant':
+            return None
+
+        def lr_lambda(step):
+            if step < self.config.warmup_steps:
+                return step / max(1, self.config.warmup_steps)
+            if self.config.lr_decay == 'cosine':
+                progress = min(1.0, (step - self.config.warmup_steps) /
+                               max(1, self.config.max_steps - self.config.warmup_steps))
+                min_ratio = self.config.min_lr / max(self.config.learning_rate, 1e-10)
+                return min_ratio + 0.5 * (1 - min_ratio) * (1 + math.cos(progress * math.pi))
+            return 1.0
+
+        return torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
+
+    # =========================================================================
+    # Validation & Checkpointing
+    # =========================================================================
+
+    @torch.no_grad()
+    def validate(self, max_batches: int = 200) -> Dict[str, float]:
+        """Validation pass."""
+        if self.val_loader is None:
+            return {}
+
+        self.model.eval()
+        total_loss = 0.0
+        total_ce = 0.0
+        n_batches = 0
+
+        for batch in self.val_loader:
+            token_ids, targets = batch
+            token_ids = token_ids.to(self.device)
+            targets = targets.to(self.device)
+
+            loss, metrics = compute_free_energy_loss(
+                self.model, token_ids, targets,
+                alpha=self.config.alpha,
+                lambda_beta=self.config.beta,
+                lambda_gamma=self.config.lambda_gamma,
+                kappa_gamma=self.config.kappa_gamma,
+                pad_token_id=self.pad_token_id,
+            )
+
+            total_loss += loss.item()
+            total_ce += metrics['loss/ce']
+            n_batches += 1
+            if n_batches >= max_batches:
+                break
+
+        self.model.train()
+
+        avg_loss = total_loss / max(n_batches, 1)
+        avg_ce = total_ce / max(n_batches, 1)
+
+        return {
+            'loss': avg_loss,
+            'ce_loss': avg_ce,
+            'perplexity': torch.exp(torch.tensor(avg_ce)).item(),
+        }
+
+    def save_checkpoint(self, is_best: bool = False) -> Path:
+        """Save training checkpoint. Returns the saved path."""
+        if self.config.checkpoint_dir is None:
+            return None
+
+        if is_best:
+            filename = 'best_model.pt'
+        else:
+            filename = f'checkpoint_step_{self.global_step}.pt'
+
+        path = self.config.checkpoint_dir / filename
+        torch.save({
+            'step': self.global_step,
+            'model_state': self.model.state_dict(),
+            'optimizer_state': self.optimizer.state_dict(),
+            'scheduler_state': self.scheduler.state_dict() if self.scheduler else None,
+            'best_val_ce': self.best_val_ce,
+            'config': getattr(self.model, 'config', None),
+        }, path)
+        return path
+
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load training checkpoint."""
+        ckpt = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(ckpt['model_state'])
+        if 'optimizer_state' in ckpt:
+            self.optimizer.load_state_dict(ckpt['optimizer_state'])
+        if ckpt.get('scheduler_state') and self.scheduler:
+            self.scheduler.load_state_dict(ckpt['scheduler_state'])
+        self.global_step = ckpt.get('step', 0)
+        self.best_val_ce = ckpt.get('best_val_ce', float('inf'))
+        print(f"Loaded checkpoint from step {self.global_step}")
 
     def _get_head_irrep_labels(self) -> list:
         """
@@ -1816,6 +2065,9 @@ def run_single_experiment(
         rg_auto_cluster=config.get('rg_auto_cluster', True),
         rg_n_clusters=config.get('rg_n_clusters', None),
         track_dynamic_rg=config.get('track_dynamic_rg', False),
+
+        # Model info for head diagnostics
+        irrep_spec=config.get('irrep_spec'),
     )
 
     print("\n" + "="*70)
