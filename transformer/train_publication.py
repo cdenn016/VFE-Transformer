@@ -175,7 +175,6 @@ STANDARD_CONFIG = {
     'log_interval': 1000,
     'eval_interval': 5000,
     'checkpoint_interval': 50000,
-    'patience': 5,
 
     # Unused in standard mode
     'kappa_beta': 1.0,
@@ -286,7 +285,6 @@ VFE_EM_CONFIG = {
     'eval_interval': 1000,
     'checkpoint_interval': 10000,
     'semantic_analysis_interval': 5000,
-    'patience': 5,
 
     # =================================================================
     # GAUGE GROUP SELECTION (Generators from so(N), Transport in GL(K))
@@ -460,7 +458,6 @@ PURE_FEP_CONFIG = {
     'log_interval': 100,
     'eval_interval': 1000,
     'checkpoint_interval': 5000,
-    'patience': 10,               # More patience for P-flow
 
     # =================================================================
     # GAUGE GROUP SELECTION
@@ -1559,13 +1556,7 @@ class PublicationTrainer(FastTrainer):
                 # CE loss is the proper metric since PPL = exp(CE)
                 if val_metrics['ce_loss'] < self.best_val_ce:
                     self.best_val_ce = val_metrics['ce_loss']
-                    self.patience_counter = 0
                     self.save_checkpoint(is_best=True)
-                else:
-                    self.patience_counter += 1
-                    if self.config.patience > 0 and self.patience_counter >= self.config.patience:
-                        print(f"\n[WARNING] Early stopping!")
-                        break
 
             # Checkpointing
             if (step + 1) % self.config.checkpoint_interval == 0:

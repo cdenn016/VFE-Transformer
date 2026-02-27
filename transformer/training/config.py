@@ -103,12 +103,6 @@ class TrainingConfig:
         return self.checkpoint_interval
 
     # ==========================================================================
-    # Early Stopping
-    # ==========================================================================
-    patience: int = 0  # If > 0, stop if no improvement for this many evals
-    min_improvement: float = 0.001  # Minimum improvement to reset patience
-
-    # ==========================================================================
     # Checkpointing
     # ==========================================================================
     checkpoint_dir: Optional[Path] = None
