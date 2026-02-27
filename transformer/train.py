@@ -992,6 +992,10 @@ class Trainer:
         # Add learning rate to metrics
         metrics['lr'] = self.optimizer.param_groups[0]['lr']
 
+        # Report sanitization metrics (sigma clamps, Cholesky fallbacks, etc.)
+        san_metrics = san.report(step=self.step, log_every=self.config.log_every)
+        metrics.update(san_metrics)
+
         return metrics
 
     @torch.no_grad()
