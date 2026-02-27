@@ -671,15 +671,8 @@ class Trainer:
         # Learning rate scheduler
         self.scheduler = self._create_scheduler()
 
-        # Mixed precision scaler (using modern AMP API for PyTorch 2.x / CUDA 12+)
-        if self.config.use_amp and self.config.device == 'cuda':
-            self.scaler = torch.amp.GradScaler('cuda')
-        else:
-            self.scaler = None
-
         # Training state
         self.step = 0
-        self.epoch = 0
         self.best_val_ce = float('inf')  # Track CE loss (not total loss) for best model
 
         # Create checkpoint directory
@@ -886,26 +879,22 @@ class Trainer:
         targets = targets.to(self.device)
 
         # Forward + loss
-        with torch.amp.autocast('cuda', enabled=(self.scaler is not None)):
-            loss, metrics = compute_free_energy_loss(
-                self.model,
-                token_ids,
-                targets,
-                alpha=self.config.alpha,
-                lambda_beta=self.config.lambda_beta,
-                lambda_gamma=self.config.lambda_gamma,
-                kappa_gamma=self.config.kappa_gamma,
-                pad_token_id=self.pad_token_id,
-            )
+        loss, metrics = compute_free_energy_loss(
+            self.model,
+            token_ids,
+            targets,
+            alpha=self.config.alpha,
+            lambda_beta=self.config.lambda_beta,
+            lambda_gamma=self.config.lambda_gamma,
+            kappa_gamma=self.config.kappa_gamma,
+            pad_token_id=self.pad_token_id,
+        )
 
-            # Scale loss for gradient accumulation
-            loss = loss / self.config.accumulation_steps
+        # Scale loss for gradient accumulation
+        loss = loss / self.config.accumulation_steps
 
         # Backward
-        if self.scaler is not None:
-            self.scaler.scale(loss).backward()
-        else:
-            loss.backward()
+        loss.backward()
 
         # =================================================================
         # Gradient Monitoring (only on logging steps to avoid GPU sync overhead)
@@ -930,10 +919,6 @@ class Trainer:
 
         # Optimizer step (if accumulation complete)
         if (self.step + 1) % self.config.accumulation_steps == 0:
-            # Gradient clipping
-            if self.scaler is not None:
-                self.scaler.unscale_(self.optimizer)
-
             # Per-group gradient clipping for large gauge groups.
             # With SO(100), phi_embed has 4950 dims per token vs 100 for mu.
             # Global clipping at grad_clip=1.0 means phi dominates the norm,
@@ -959,11 +944,7 @@ class Trainer:
                 )
 
             # Optimizer step
-            if self.scaler is not None:
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                self.optimizer.step()
+            self.optimizer.step()
 
             # Update learning rate
             if self.scheduler is not None:
@@ -1094,7 +1075,6 @@ class Trainer:
                     if self.step >= self.config.max_steps:
                         break
 
-                self.epoch += 1
 
         except KeyboardInterrupt:
             print("\n⚠ Training interrupted by user")
@@ -1127,7 +1107,6 @@ class Trainer:
 
         checkpoint = {
             'step': self.step,
-            'epoch': self.epoch,
             'model_state': self.model.state_dict(),
             'best_val_ce': self.best_val_ce,
             'config': self.model.config,
@@ -1154,7 +1133,6 @@ class Trainer:
             self.scheduler.load_state_dict(checkpoint['scheduler_state'])
 
         self.step = checkpoint.get('step', 0)
-        self.epoch = checkpoint.get('epoch', 0)
         # Backward compatible: try new key first, fall back to old key
         self.best_val_ce = checkpoint.get('best_val_ce', checkpoint.get('best_val_loss', float('inf')))
 
