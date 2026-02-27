@@ -79,7 +79,6 @@ class TrainingConfig:
     # ==========================================================================
     batch_size: int = 16
     max_seq_len: int = 256
-    num_epochs: Optional[int] = None  # If set, overrides max_steps
     accumulation_steps: int = 1
 
     # ==========================================================================
@@ -121,7 +120,6 @@ class TrainingConfig:
     # Hardware
     # ==========================================================================
     device: str = 'cuda'
-    use_amp: bool = False  # Automatic mixed precision
 
     # ==========================================================================
     # Gauge Group
