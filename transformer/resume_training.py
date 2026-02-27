@@ -384,12 +384,8 @@ def resume_training():
     # Create training config
     print("\nCreating training config...")
 
-    # Default use_amp to True for CUDA (major speedup)
-    use_amp = config.get('use_amp', DEVICE == 'cuda')
-
     # Print key performance settings
     print(f"  Performance settings:")
-    print(f"    use_amp: {use_amp}")
     print(f"    batch_size: {config.get('batch_size', 32)}")
     print(f"    grad_accumulation: {GRAD_ACCUMULATION}")
     print(f"    diagonal_covariance: {config.get('diagonal_covariance', True)}")
@@ -422,9 +418,6 @@ def resume_training():
 
         # Checkpointing
         checkpoint_dir=experiment_dir,
-
-        # GPU optimizations - default to True for CUDA!
-        use_amp=use_amp,
 
         # P-FLOW and delta rule
         use_p_flow=config.get('use_p_flow', False),

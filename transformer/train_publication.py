@@ -1290,17 +1290,10 @@ class PublicationTrainer(FastTrainer):
         start_time = time.time()
         train_iterator = iter(self.train_loader)
 
-        # Calculate total steps: epochs takes precedence over max_steps
-        epochs = getattr(self.config, 'epochs', None)
-        if epochs is not None and epochs > 0:
-            steps_per_epoch = len(self.train_loader)
-            total_steps = epochs * steps_per_epoch
-            print(f"  Training for {epochs} epoch(s) ({steps_per_epoch} steps/epoch = {total_steps:,} total steps)")
-        else:
-            total_steps = self.config.max_steps
-            steps_per_epoch = len(self.train_loader)
-            equiv_epochs = total_steps / steps_per_epoch if steps_per_epoch > 0 else 0
-            print(f"  Training for {total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
+        total_steps = self.config.max_steps
+        steps_per_epoch = len(self.train_loader)
+        equiv_epochs = total_steps / steps_per_epoch if steps_per_epoch > 0 else 0
+        print(f"  Training for {total_steps:,} steps (~{equiv_epochs:.1f} epochs)")
 
         try:
             from tqdm import tqdm
@@ -1781,7 +1774,6 @@ def run_single_experiment(
     # =================================================================
 
     train_config = FastTrainingConfig(
-        epochs=config.get('epochs', None),
         max_steps=config['max_steps'],
         warmup_steps=config['warmup_steps'],
 
@@ -1809,9 +1801,6 @@ def run_single_experiment(
 
         use_wandb=use_wandb,
         checkpoint_dir=exp_checkpoint_dir,
-
-        # GPU optimizations
-        use_amp=config.get('use_amp', False),
 
         # P-FLOW: EMA update of token embeddings toward successful beliefs
         use_p_flow=config.get('use_p_flow', False),
@@ -1844,30 +1833,18 @@ def run_single_experiment(
     except AttributeError:
         dataset_tokens = None
 
-    if train_config.epochs is not None and train_config.epochs > 0:
-        effective_steps = train_config.epochs * steps_per_epoch
-        total_tokens = effective_steps * tokens_per_step
-        print(f"  Epochs:         {train_config.epochs}")
-        print(f"  Steps/epoch:    {steps_per_epoch:,}")
-        print(f"  Total steps:    {effective_steps:,}")
-        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
-        if dataset_tokens:
-            coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
-    else:
-        equiv_epochs = train_config.max_steps / steps_per_epoch
-        total_tokens = train_config.max_steps * tokens_per_step
-        print(f"  Max steps:      {train_config.max_steps:,}")
-        print(f"  Steps/epoch:    {steps_per_epoch:,}")
-        print(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
-        print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
-        if dataset_tokens:
-            coverage = total_tokens / dataset_tokens * 100
-            print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
+    equiv_epochs = train_config.max_steps / steps_per_epoch
+    total_tokens = train_config.max_steps * tokens_per_step
+    print(f"  Max steps:      {train_config.max_steps:,}")
+    print(f"  Steps/epoch:    {steps_per_epoch:,}")
+    print(f"  *** EPOCHS:     {equiv_epochs:.4f} ***")
+    print(f"  Tokens seen:    {total_tokens:,} ({total_tokens/1e6:.1f}M)")
+    if dataset_tokens:
+        coverage = total_tokens / dataset_tokens * 100
+        print(f"  Dataset:        {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M) - {coverage:.1f}% coverage")
     print(f"  Warmup:         {train_config.warmup_steps}")
     print(f"  Batch size:     {batch_size}")
     print(f"  Seq length:     {seq_len}")
-    print(f"  Use AMP:        {train_config.use_amp}")
     print(f"  Num workers:    {config.get('num_workers', 0)}")
     print(f"\nFree Energy Weights:")
     print(f"  α (self-consistency): {train_config.alpha}")
@@ -1919,15 +1896,9 @@ def run_single_experiment(
         print("="*70)
         print(f"Device: {device}")
 
-        # Calculate total steps: epochs takes precedence
-        epochs = config.get('epochs', None)
         steps_per_epoch = len(train_loader)
-        if epochs is not None and epochs > 0:
-            total_steps = epochs * steps_per_epoch
-            print(f"Epochs: {epochs} ({steps_per_epoch:,} steps/epoch = {total_steps:,} total)")
-        else:
-            total_steps = config['max_steps']
-            print(f"Total steps: {total_steps:,} (~{total_steps/steps_per_epoch:.1f} epochs)")
+        total_steps = config['max_steps']
+        print(f"Total steps: {total_steps:,} (~{total_steps/steps_per_epoch:.1f} epochs)")
 
         print("\nLearning via P-flow: beliefs → priors (no backprop)")
         print("="*70 + "\n")
@@ -2135,12 +2106,7 @@ def run_single_experiment(
         print("="*70)
         print(f"Device: {device}")
         print(f"FFN mode: {ffn_mode}")
-        # Show epochs-based info if set
-        if train_config.epochs is not None and train_config.epochs > 0:
-            eff_steps = train_config.epochs * steps_per_epoch
-            print(f"Epochs: {train_config.epochs} ({steps_per_epoch:,} steps/epoch = {eff_steps:,} total)")
-        else:
-            print(f"Total steps: {train_config.max_steps:,}")
+        print(f"Total steps: {train_config.max_steps:,}")
         print("\nNOTE: First few batches may be slow (JIT compilation)")
         print("="*70 + "\n")
 
@@ -2193,7 +2159,7 @@ def run_single_experiment(
                 'vocab_size': actual_vocab_size,
                 'checkpoint': str(final_ckpt),
                 # Training duration stats
-                'total_steps': train_config.max_steps if train_config.epochs is None else train_config.epochs * steps_per_epoch,
+                'total_steps': train_config.max_steps,
                 'tokens_seen': total_tokens,
                 'dataset_tokens': dataset_tokens,
                 'dataset_coverage': total_tokens / dataset_tokens if dataset_tokens else None,
