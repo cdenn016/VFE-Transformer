@@ -173,7 +173,8 @@ class GaugeTransformerLM(nn.Module):
         # =================================================================
         gauge_group = config.get('gauge_group', 'SO3')
         gauge_dim = config.get('gauge_dim', 3)  # N for SO(N), K for GL(K)
-        use_multi_irrep = config.get('use_multi_irrep', False)
+        # Always use block-diagonal generators from irrep_spec
+        use_multi_irrep = True
 
         # =================================================================
         # Gauge Mode: Controls transport operator behavior
@@ -217,7 +218,6 @@ class GaugeTransformerLM(nn.Module):
         elif gauge_group == 'GLK':
             # GL(K): Check if multi-head requested
             is_glk_multihead = (
-                use_multi_irrep and
                 irrep_spec is not None and
                 len(irrep_spec) == 1 and
                 irrep_spec[0][0] != 'full' and
@@ -236,16 +236,12 @@ class GaugeTransformerLM(nn.Module):
 
         if GENERATORS_AVAILABLE:
             if gauge_group == 'SO3':
-                if use_multi_irrep and irrep_spec is not None:
-                    generators = generate_multi_irrep_generators(irrep_spec)
-                else:
-                    generators = generate_so3_generators(embed_dim)
+                generators = generate_multi_irrep_generators(irrep_spec)
             elif gauge_group == 'GLK':
                 # GL(K): Check if multi-head requested via irrep_spec
                 # Multi-head: irrep_spec = [('fund', n_heads, d_head)] where n_heads * d_head = embed_dim
                 # Single-head: irrep_spec = [('full', 1, embed_dim)] or no special format
                 is_multihead = (
-                    use_multi_irrep and
                     irrep_spec is not None and
                     len(irrep_spec) == 1 and
                     irrep_spec[0][0] != 'full' and
@@ -292,14 +288,7 @@ class GaugeTransformerLM(nn.Module):
                     generators = generate_glK_generators(embed_dim)
                     print(f"[INFO] GL(K) single-head: {embed_dim}² = {embed_dim**2} generators")
             else:  # SO(N)
-                if use_multi_irrep and irrep_spec is not None:
-                    generators = generate_multi_irrep_soN_generators(irrep_spec, gauge_dim)
-                else:
-                    generators = generate_soN_generators(gauge_dim)
-                    # For single-irrep SO(N), embed_dim should equal gauge_dim
-                    if embed_dim != gauge_dim:
-                        print(f"[WARNING] SO(N) with N={gauge_dim} but embed_dim={embed_dim}. "
-                              f"Consider using multi-irrep mode for embed_dim != N.")
+                generators = generate_multi_irrep_soN_generators(irrep_spec, gauge_dim)
         else:
             # Fallback: random skew-symmetric matrices (should never happen!)
             # math_utils/generators.py should always be available

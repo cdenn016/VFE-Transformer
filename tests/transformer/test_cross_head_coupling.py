@@ -161,7 +161,6 @@ class TestModelIntegration:
             'evolve_sigma': False,
             'evolve_phi': True,
             'gauge_group': 'GLK',
-            'use_multi_irrep': True,
             'use_block_diagonal_kl': True,
             'diagonal_covariance': True,
             'use_layernorm': True,

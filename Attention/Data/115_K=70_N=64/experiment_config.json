@@ -52,7 +52,6 @@
     "gauge_group": "GLK",
     "gauge_dim": 10,
     "gauge_mode": "learned",
-    "use_multi_irrep": true,
     "enforce_orthogonal": false,
     "use_p_flow": false,
     "p_flow_ema_decay": 0.95,
