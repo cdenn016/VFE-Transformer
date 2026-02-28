@@ -260,12 +260,10 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
     mu_lr = m.get('mu_lr', [])
     sigma_lr = m.get('sigma_lr', [])
     phi_lr = m.get('phi_lr', [])
-    ffn_lr = m.get('ffn_lr', [])
 
     mu_lr_data = filter_vals(mu_lr)
     sigma_lr_data = filter_vals(sigma_lr)
     phi_lr_data = filter_vals(phi_lr)
-    ffn_lr_data = filter_vals(ffn_lr)
 
     if mu_lr_data:
         m_steps, m_vals = zip(*mu_lr_data)
@@ -276,9 +274,6 @@ def create_basic_plots(metrics: Dict, output_path: Path, start_step: int = 5):
     if phi_lr_data:
         p_steps, p_vals = zip(*phi_lr_data)
         ax.plot(p_steps, p_vals, label='φ LR', alpha=0.7)
-    if ffn_lr_data:
-        f_steps, f_vals = zip(*ffn_lr_data)
-        ax.plot(f_steps, f_vals, label='FFN LR', alpha=0.7)
 
     ax.set_xlabel('Step')
     ax.set_ylabel('Learning Rate')

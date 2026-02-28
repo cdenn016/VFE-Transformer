@@ -11,8 +11,8 @@ Parameter Groups:
     2. sigma_embed: Covariance embeddings (lower LR for stability)
     3. phi_embed: Gauge frame embeddings
     4. attention: Attention mechanism parameters
-    5. ffn: Feed-forward network parameters
-    6. output: Output projection parameters
+    5. output: Output projection parameters
+    6. other: Layer norms, VFE hyperparams (base LR, no decay)
 """
 
 import torch
@@ -45,8 +45,8 @@ def create_param_groups(
     sigma_params = []
     phi_params = []
     attention_params = []
-    ffn_params = []
     output_params = []
+    other_params = []
 
     for name, param in model.named_parameters():
         if not param.requires_grad:
@@ -70,9 +70,9 @@ def create_param_groups(
         # Output projection
         elif 'out_proj' in name or 'lm_head' in name:
             output_params.append(param)
-        # FFN (default for everything else)
+        # Other: layer norms, VFE hyperparams (raw_a0, raw_b0, log_kappa_heads)
         else:
-            ffn_params.append(param)
+            other_params.append(param)
 
     # Create parameter groups
     param_groups = []
@@ -117,16 +117,6 @@ def create_param_groups(
         if verbose:
             print(f"  Parameter group 'attention': {len(attention_params)} tensors @ lr={config.attention_lr}")
 
-    if ffn_params:
-        param_groups.append({
-            'params': ffn_params,
-            'lr': config.ffn_lr,
-            'weight_decay': config.weight_decay,
-            'name': 'ffn',
-        })
-        if verbose:
-            print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={config.ffn_lr}")
-
     if output_params:
         param_groups.append({
             'params': output_params,
@@ -136,6 +126,16 @@ def create_param_groups(
         })
         if verbose:
             print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={config.output_lr}")
+
+    if other_params:
+        param_groups.append({
+            'params': other_params,
+            'lr': config.learning_rate,
+            'weight_decay': 0.0,
+            'name': 'other',
+        })
+        if verbose:
+            print(f"  Parameter group 'other': {len(other_params)} tensors @ lr={config.learning_rate}")
 
     return param_groups
 

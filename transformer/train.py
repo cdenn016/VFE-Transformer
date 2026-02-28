@@ -731,7 +731,7 @@ class Trainer:
 
         Modes:
         - Simple (use_param_groups=False): 2 groups (decay vs no-decay) with single LR
-        - Multi-group (use_param_groups=True): 6 groups (mu, sigma, phi, attention, ffn, output)
+        - Multi-group (use_param_groups=True): 6 groups (mu, sigma, phi, attention, output, other)
         """
         if self.config.use_param_groups:
             # Multi-group mode: Natural gradients with per-parameter-type learning rates
@@ -768,8 +768,8 @@ class Trainer:
             2. sigma_embed: Covariance embeddings
             3. phi_embed: Gauge frame embeddings
             4. attention: Attention mechanism
-            5. ffn: Feed-forward networks
-            6. output: Output projection
+            5. output: Output projection
+            6. other: Layer norms, VFE hyperparams (base LR, no decay)
 
         This exploits natural gradient structure on statistical manifolds!
         """
@@ -778,8 +778,8 @@ class Trainer:
         sigma_params = []
         phi_params = []
         attention_params = []
-        ffn_params = []
         output_params = []
+        other_params = []
 
         for name, param in self.model.named_parameters():
             if not param.requires_grad:
@@ -803,9 +803,9 @@ class Trainer:
             # Output projection
             elif 'out_proj' in name:
                 output_params.append(param)
-            # FFN (default for everything else)
+            # Other: layer norms, VFE hyperparams (raw_a0, raw_b0, log_kappa_heads)
             else:
-                ffn_params.append(param)
+                other_params.append(param)
 
         # Create parameter groups
         param_groups = []
@@ -846,15 +846,6 @@ class Trainer:
             })
             print(f"  Parameter group 'attention': {len(attention_params)} tensors @ lr={self.config.attention_lr}")
 
-        if ffn_params:
-            param_groups.append({
-                'params': ffn_params,
-                'lr': self.config.ffn_lr,
-                'weight_decay': self.config.weight_decay,
-                'name': 'ffn',
-            })
-            print(f"  Parameter group 'ffn': {len(ffn_params)} tensors @ lr={self.config.ffn_lr}")
-
         if output_params:
             param_groups.append({
                 'params': output_params,
@@ -863,6 +854,15 @@ class Trainer:
                 'name': 'output',
             })
             print(f"  Parameter group 'output': {len(output_params)} tensors @ lr={self.config.output_lr}")
+
+        if other_params:
+            param_groups.append({
+                'params': other_params,
+                'lr': self.config.learning_rate,
+                'weight_decay': 0.0,
+                'name': 'other',
+            })
+            print(f"  Parameter group 'other': {len(other_params)} tensors @ lr={self.config.learning_rate}")
 
         optimizer = torch.optim.AdamW(
             param_groups,

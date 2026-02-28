@@ -405,8 +405,7 @@ def resume_training():
         sigma_lr=config.get('sigma_lr', 0.005),
         phi_lr=config.get('phi_lr', 0.01),
         attention_lr=config.get('phi_lr', 0.01),
-        ffn_lr=config.get('ffn_lr', 0.001),
-        output_lr=config.get('ffn_lr', 0.001),
+        output_lr=config.get('output_lr', 0.001),
 
         weight_decay=config.get('weight_decay', 0.01),
         grad_clip=config.get('grad_clip', 1.0),
