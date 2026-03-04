@@ -55,7 +55,7 @@ We validate the degenerate-limit predictions on a frozen BERT model across 105 d
 
 \section{Introduction}
 
-Language is fundamentally a dynamic informational system: speakers and writers encode beliefs under uncertainty, listeners decode them, and the statistical regularities of this process reflect the structure of communication itself. Language modeling---predicting the next token given context---is a snapshot of this dynamic system, and the architectures that excel at it should reflect the mathematical structure of information exchange under uncertainty.
+Language is fundamentally a dynamic informational system: speakers and writers encode beliefs under uncertainty, listeners decode them, and the statistical regularities of this process reflect the structure of communication itself. Language modeling is a snapshot of this dynamic system, and the architectures that excel at it should reflect the mathematical structure of information exchange under uncertainty.
 
 Recent advances in neuroscience and intelligent systems have independently converged on the idea that intelligent systems integrate perception, inference, and communication under the constraints of uncertainty \citep{bahdanau2014neural,amari1998natural,bronstein2021geometric,foerster2016learning,wooldridge2009introduction}. Friston's Free Energy Principle (FEP) provides a general variational formulation of inference in cognitive systems \citep{friston2010free,parr2022active,friston2017graphical,ramstead2020variational}, whereas the attention mechanism in modern machine learning architectures defines a powerful (although empirically derived) rule for token prediction \citep{clark2019does,vaswani2017attention}. Despite their shared reliance on probabilistic inference and pairwise interaction, these two frameworks remain stubbornly separated. In particular, transformer attention lacks an underlying geometric or mathematical foundation and details on how and why modern machine learning architectures operate as well as they do remains obscure.
 
@@ -69,12 +69,7 @@ We then show that in the flat-bundle, isotropic, delta-function limit attention 
 
 Finally, we show that gradient descent on the gauge-equivariant free energy, in the deterministic constant-gauge limit, recovers the standard transformer training update. This provides a variational interpretation of backpropagation: the chain rule through layered compositions corresponds to variational message-passing in the gauge-theoretic framework. The framework naturally invokes natural gradient descent on the Fisher-Rao metric, which offers theoretical convergence advantages; whether this translates to practical speedup in deep learning requires controlled empirical comparison, which we leave to future work.
 
-\subsection{An intuitive simplification for non-geometers}
-For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
 
-Concretely, at every point $c$ in the base manifold, agent $i$ carries a mean vector $\mu_i(c)$ and a covariance matrix $\Sigma_i(c)$ representing, respectively, its local expected state and uncertainty. Together these form a smooth Gaussian field—the agent’s belief section of the statistical bundle. 
-
-We will see that the agent's local gauge frame $\phi_i(c)$ may be intuitively interpreted as the agent's subjective frame of reference; its internal coordinate system through which beliefs and models are represented and compared. In this sense, $\phi_i(c)$ captures an agent’s “internal orientation” toward the world: it determines how external information is projected into the agent’s internal representational space. Gauge transformations $\phi_i(c) \to \phi_i(c) + \xi(c)$ thus correspond to changes in perspective that leave the underlying informational content invariant, much like shifts of viewpoint in perception that preserve the same world model. 
 
 \begin{figure}[h]
 \centering
@@ -209,24 +204,12 @@ We begin with a general geometric construction that naturally supports hierarchi
 
 Briefly, in this current report, we describe agents as modeled by a local section of an associated bundle to a principal $G$ fiber bundle whereby tokens are represented by agents occupying a single 0-dimensional base manifold with no particular ordering. We shall show that this framework enables a unified description of both intra-agent inference and inter-agent communication in terms of gauge frame transport and alignment via a generalized free energy principle. 
 
+\subsection{An intuitive simplification for non-geometers}
+For interdisciplinary readers, it may be helpful to visualize each agent in this framework as a vector and a matrix field defined over a finite spatial region. 
 
-\subsection{Specializations for the Current Study}
-Here we specify the simplifications adopted for the remainder of this work, which retain essential geometric structure while ensuring computational tractability and simplification.
+Concretely, at every point $c$ in the base manifold, agent $i$ carries a mean vector $\mu_i(c)$ and a covariance matrix $\Sigma_i(c)$ representing, respectively, its local expected state and uncertainty. Together these form a smooth Gaussian field—the agent’s belief section of the statistical bundle. 
 
-\subsubsection{Matched Bundles}
-In our general formulation agents are treated as pairs of sections of associated bundles $\mathcal{B}_q$ and $\mathcal{B}_p$ of beliefs and models.  Here we simplify by implementing
-
-\begin{equation}
-\mathcal{B}_q = \mathcal{B}_p =: \mathcal{B}, \qquad \rho_q = \rho_p =: \rho.
-\end{equation}
-
-This gives $\mathcal{E}_q = \mathcal{E}_p =: \mathcal{E}$, and the bundle morphisms become:
-
-\begin{equation}
-\Phi = \tilde{\Phi} = \text{id}_{\mathcal{E}}.
-\end{equation}
-
-Each agent then reduces to a single section $\sigma^i: \mathcal{U}_i \to \mathcal{E}$, with belief/prior distinction maintained through local fiber coordinates.
+We will see that the agent's local gauge frame $\phi_i(c)$ may be intuitively interpreted as the agent's subjective frame of reference; its internal coordinate system through which beliefs and models are represented and compared. In this sense, $\phi_i(c)$ captures an agent’s “internal orientation” toward the world: it determines how external information is projected into the agent’s internal representational space. Gauge transformations $\phi_i(c) \to \phi_i(c) + \xi(c)$ thus correspond to changes in perspective that leave the underlying informational content invariant, much like shifts of viewpoint in perception that preserve the same world model. 
 
 
 
@@ -309,7 +292,7 @@ Global gauge $W_Q, W_K$ \\
 
 
 \subsubsection{Local Gauge Frames}
-Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may vary spatially.  This induces a local connection:
+Each agent $i$ has a gauge frame field $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ which may, in general, vary across the base manifold.  This then induces a local connection:
 
 \begin{equation}
 A^{(i)}_\mu(c) = -\partial_\mu \phi_i(c) + \mathcal{O}(\phi_i^2),
@@ -323,21 +306,6 @@ F^{(i)}_{\mu\nu}(c) = \partial_\mu A^{(i)}_\nu - \partial_\nu A^{(i)}_\mu + [A^{
 
 In the 0-dimensional case, which we consider here, there exist no gauge connections $A_\mu$ or field strengths $F_{\mu\nu}$. What remains is the algebraic structure of group-valued frame transformations $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$ acting on statistical fibers. This algebraic structure already suffices to recover transformer attention (as shown below), and already provides a functional language model when implemented without taking the degenerate limits (Section~\ref{sec:glk_lm}). The richer differential-geometric content is available in the full theory on higher-dimensional base manifolds and represents a direction for future work (see Section~6.3).
 
-
-\subsubsection{Gauge-Aligned Divergence}
-With these assumptions, the gauge-aligned KL divergence between agents is (see appendix):
-
-\begin{equation}
-D_{\text{KL}}\left[q_i(c) \,\big\|\, \Omega_{ij}(c) q_j(c)\right],
-\end{equation}
-
-where for Gaussian beliefs:
-
-\begin{equation}
-\Omega_{ij}(c) \cdot (\mu_j, \Sigma_j) = \left(\Omega_{ij}(c)\mu_j, \, \Omega_{ij}(c)\Sigma_j\Omega_{ij}(c)^\top\right).
-\end{equation}
-
-This divergence forms the basis of our attention mechanism.
 
 \subsubsection{$\mathrm{GL}(K)$ Gauge Invariance of KL Divergence}
 \label{sec:glk_invariance}
@@ -364,21 +332,21 @@ Under the pushforward $\Omega_* P = \mathcal{N}(\Omega\mu_P, \Omega\Sigma_P\Omeg
 
 \textbf{Trace term:}
 \begin{equation}
-\mathrm{Tr}\big[(\Omega\Sigma_Q\Omega^\top)^{-1}(\Omega\Sigma_P\Omega^\top)\big] = \mathrm{Tr}\big[\Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega\Sigma_P\Omega^\top\big] = \mathrm{Tr}(\Sigma_Q^{-1}\Sigma_P). \quad \checkmark
+\mathrm{Tr}\big[(\Omega\Sigma_Q\Omega^\top)^{-1}(\Omega\Sigma_P\Omega^\top)\big] = \mathrm{Tr}\big[\Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega\Sigma_P\Omega^\top\big] = \mathrm{Tr}(\Sigma_Q^{-1}\Sigma_P). 
 \end{equation}
 
 \textbf{Quadratic term:}
 \begin{align}
 &(\Omega\mu_P - \Omega\mu_Q)^\top (\Omega\Sigma_Q\Omega^\top)^{-1} (\Omega\mu_P - \Omega\mu_Q) \nonumber\\
-&= (\mu_P - \mu_Q)^\top \Omega^\top \Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega (\mu_P - \mu_Q) = (\mu_P - \mu_Q)^\top \Sigma_Q^{-1}(\mu_P - \mu_Q). \quad \checkmark
+&= (\mu_P - \mu_Q)^\top \Omega^\top \Omega^{-\top}\Sigma_Q^{-1}\Omega^{-1}\Omega (\mu_P - \mu_Q) = (\mu_P - \mu_Q)^\top \Sigma_Q^{-1}(\mu_P - \mu_Q). 
 \end{align}
 
 \textbf{Log-determinant term:}
 \begin{equation}
-\log\frac{\det(\Omega\Sigma_Q\Omega^\top)}{\det(\Omega\Sigma_P\Omega^\top)} = \log\frac{(\det\Omega)^2 \det\Sigma_Q}{(\det\Omega)^2 \det\Sigma_P} = \log\frac{\det\Sigma_Q}{\det\Sigma_P}. \quad \checkmark
+\log\frac{\det(\Omega\Sigma_Q\Omega^\top)}{\det(\Omega\Sigma_P\Omega^\top)} = \log\frac{(\det\Omega)^2 \det\Sigma_Q}{(\det\Omega)^2 \det\Sigma_P} = \log\frac{\det\Sigma_Q}{\det\Sigma_P}. 
 \end{equation}
 
-The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
+The $(\det\Omega)^2$ factors cancel identically. Since all three components are invariant, $\\ D_{\mathrm{KL}}(\Omega_* P \| \Omega_* Q) = D_{\mathrm{KL}}(P \| Q)$.
 \end{proof}
 
 Importantly, the proof extends to all $f$-divergences: for any convex function $f$ with $f(1) = 0$,
@@ -408,8 +376,8 @@ $\mathfrak{g}$ & Lie algebra of $G$ & $\mathfrak{gl}(K)$ \\
 \multicolumn{3}{l}{\textit{Gauge Fields and Connections}} \\
 $\Omega_{ij}$ & Connection $\mathcal{B}_{q_j} \to \mathcal{B}_{q_i}$ & $\mathrm{GL}(K_q)$ \\
 $\tilde\Omega_{ij}$ & Connection $\mathcal{B}_{p_j} \to \mathcal{B}_{p_i}$ & $\mathrm{GL}(K_p)$ \\
-$\phi_i$ & Gauge parameter (belief frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^3$ \\
-$\tilde{\phi}_i$ & Gauge parameter (model frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^3$ \\
+$\phi_i$ & Gauge parameter (belief frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^{K_q}$ \\
+$\tilde{\phi}_i$ & Gauge parameter (model frame) & $\mathfrak{g}\!\cong\!\mathbb{R}^{K_p}$ \\
 
 \\
 \multicolumn{3}{l}{\textit{Bundle Morphisms}} \\
@@ -418,7 +386,7 @@ $\tilde{\Phi}_i$ & Morphism $\mathcal{B}_{p_i} \to \mathcal{B}_{q_i}$ & $\mathbb
 \\
 \multicolumn{3}{l}{\textit{Statistical Parameters}} \\
 $q_i(k_i)$ & Belief distribution & $\mathcal{N}(\mu_{q,i},\Sigma_{q,i})$ \\
-$p_i(k_i)$ & Model distribution & $\mathcal{N}(\mu_{p,i},\Sigma_{p,i})$ \\
+$p_i(k_i)$ & Prior distribution & $\mathcal{N}(\mu_{p,i},\Sigma_{p,i})$ \\
 $\mu_{q,i},\mu_{p,i}$ & Mean vectors & $\mathbb{R}^{K_q},\mathbb{R}^{K_p}$ \\
 $\Sigma_{q,i},\Sigma_{p,i}$ & Covariance matrices & $\mathbb{R}^{K\times K},\succ0$ \\
 \\
@@ -500,21 +468,6 @@ where $\phi_i: \mathcal{U}_i \to \mathfrak{gl}(K)$ is agent $i$'s gauge frame fi
 
 mapping agent $j$'s latent into agent $i$'s frame.
 
-\begin{remark}[Surjectivity of the matrix exponential]
-\label{rem:exp_surjectivity}
-The exponential map $\exp: \mathfrak{gl}(K, \mathbb{R}) \to \mathrm{GL}(K, \mathbb{R})$ is \emph{not} surjective for $K > 1$, and this has three consequences for the parameterization~\eqref{eq:gauge_frame_rotation}:
-
-\textbf{(i) Image restricted to $\mathrm{GL}^+(K)$.}
-Since $\det(\exp X) = e^{\mathrm{tr}(X)} > 0$ for all $X \in \mathfrak{gl}(K)$, the image of $\exp$ lies entirely within the identity component $\mathrm{GL}^+(K)$. Orientation-reversing transformations ($\det < 0$) are unreachable. The KL divergence is invariant under the full $\mathrm{GL}(K)$ (Theorem~\ref{thm:glk_invariance}), but restricting to the identity component is standard for gauge connections and introduces no loss of generality for connected bundles.
-
-\textbf{(ii) Non-surjectivity within $\mathrm{GL}^+(K)$.}
-Even within $\mathrm{GL}^+(K)$, a single matrix exponential does not reach every element. By Culver's theorem \citep{culver1966existence}, a real matrix $A$ possesses a real logarithm (i.e., $A = e^X$ for some $X \in \mathfrak{gl}(K, \mathbb{R})$) if and only if for each negative real eigenvalue $\lambda$ of $A$, the number of Jordan blocks of each size associated with $\lambda$ is even. Matrices violating this condition---such as $\mathrm{diag}(-2, -3) \in \mathrm{GL}^+(2)$, where each negative eigenvalue has a single Jordan block of size one---have positive determinant but no real logarithm.
-
-\textbf{(iii) Products of exponentials cover $\mathrm{GL}^+(K)$.}
-Despite (ii), the \emph{product} parameterization $\Omega_{ij} = e^{\phi_i} \cdot e^{-\phi_j}$ used in~\eqref{eq:gauge_frame_rotation} \emph{does} cover all of $\mathrm{GL}^+(K)$. This follows from the polar decomposition: any $A \in \mathrm{GL}^+(K)$ can be written as $A = PO$ where $P$ is symmetric positive-definite and $O \in \mathrm{SO}(K)$. Since every symmetric positive-definite matrix has a real logarithm (all eigenvalues positive) and $\exp: \mathfrak{so}(K) \to \mathrm{SO}(K)$ is surjective (compact connected group), we obtain $A = \exp(\log P) \cdot \exp(\log O)$, a product of two matrix exponentials. Since $\phi_i$ and $\phi_j$ are independently learned, the transport operator $\Omega_{ij}$ can represent any element of $\mathrm{GL}^+(K)$.
-
-For $\mathrm{SO}(K)$ gauge groups (when generators are restricted to $\mathfrak{so}(K)$), $\exp$ is surjective and no such subtlety arises.
-\end{remark}
 
 \subsection{Single-Agent Free Energy Principle}
 
@@ -956,12 +909,6 @@ Therefore:
 
 \begin{equation}
 s_{ij} = \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i\|^2 + \frac{1}{2\sigma^2}\|\mu_j\|^2 - \frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top}\mu_j + C.
-\end{equation}
-
-Rearranging:
-
-\begin{equation}
-s_{ij} = -\frac{1}{\sigma^2}\mu_i^\top \Omega^{-\top}\mu_j + \frac{1}{2\sigma^2}\|\mu_j\|^2 + \frac{1}{2\sigma^2}\|\Omega^{-1}\mu_i\|^2 + C.
 \end{equation}
 
 \paragraph{Softmax Cancellation of Query-Dependent Terms.}
@@ -1440,15 +1387,6 @@ This is a fundamentally different mechanism from the standard output projection 
 
 From the perspective of the VFE gradient flow (Eq.~\ref{eq:model_dynamics}), the block-diagonal restriction constrains the gradient $\nabla_\phi \mathcal{F}$ to lie within the block-diagonal sub-algebra $\bigoplus_a \mathfrak{gl}(d_{\text{head}})$. Restoring the off-diagonal components amounts to allowing the gradient to flow along the full $\mathfrak{gl}(d_k)$, utilizing all $d_k^2$ generators. The projected-out gradient components $\nabla_\phi \mathcal{F}\big|_{\mathfrak{m}}$ represent cross-head alignment forces that are present in the full VFE but zeroed out by the architectural constraint. Whether these forces carry any useful signal is an empirical question with significant implications.
 
-\subsubsection{Example: $\mathrm{SO}(3)$ Irreducible Representations.}
-
-As an intuitive example we may consider the $G = \mathrm{SO}(3)$ subgroup of $GL(d_k)$. Here, every finite-dimensional representation decomposes into irreducible representations (irreps) labeled by angular momentum $\ell \geq 0$ with $\dim(D^\ell) = 2\ell + 1$. Each irrep block corresponds to an attention head with intrinsic geometric meaning: the $\ell = 0$ (scalar) head captures rotationally-invariant scalar features, the $\ell = 1$ (vector) head captures directional information, and higher-$\ell$ heads capture increasingly complex tensorial structure.
-
-The off-diagonal mixing discussed in Section~\ref{sec:off_diagonal_mixing} acquires physical intuition in this context. The off-diagonal blocks $\Omega^{ab}$ of the gauge transport map between irrep subspaces of different angular momentum. In the $\mathrm{SO}(3)$ representation theory, such inter-irrep maps are governed by well known Clebsch-Gordan coefficients $\langle \ell_a, m_a | \ell_b, m_b; \ell_c, m_c \rangle$ that dictate how angular momentum channels couple. Practically speaking, the off-diagonal block $\Omega^{(\ell_a)(\ell_b)} : D^{\ell_b} \to D^{\ell_a}$ encode the selection rules for how information in the $\ell_b$ channel is projected into the $\ell_a$ channel during transport. A purely block-diagonal $\Omega$ (standard multi-head attention) treats each angular momentum channel independently (e.g. scalars never mix with vectors, vectors never mix with tensors, etc). In existing equivariant architectures such as Tensor Field Networks \citep{thomas2018tensor} and $\mathrm{SE}(3)$-Transformers \citep{fuchs2020se3}, these couplings are implemented through explicit tensor product layers with Clebsch-Gordan contractions applied \emph{post-attention}. The off-diagonal gauge transport identifies the same coupling structure but places it \emph{within the transport operator itself}, making the attention scores sensitive to cross-channel correlations.
-
-This stands in contrast with standard multi-head attention, where head dimensions are uniform and learned from data with no geometric constraint. The $\mathrm{GL}(K)$ framework encompasses both approaches. Standard transformers learn unconstrained $\mathrm{GL}(d_{\text{head}})$ per head, while equivariant architectures restrict to compact subgroups with much richer multi-head structure.
-
-This suggests a route towards geometrically aware transformers with non-uniform head dimensions matching irrep sizes for tasks with known symmetries, equivariance constraints within each irrep block, or physical inductive biases for domains like molecular dynamics or 3D vision and more.
 
 
 \subsection{Rotary Position Embeddings as Position-Dependent Gauge Frames}
@@ -1551,22 +1489,6 @@ p_c = \mathcal{N}(\mu_p^c, \Sigma_p^c), \qquad \phi_c \in \mathfrak{gl}(K),
 \label{eq:prior_bank}
 \end{equation}
 comprising a prior mean $\mu_p^c$, prior covariance $\Sigma_p^c$, and gauge frame coefficients $\phi_c$. At the start of each sequence, agent $i$'s belief is initialized to the prior of its token type: $q_i(0) = p_{\mathrm{token}(i)}$. The collection $\{(\mu_p^c, \Sigma_p^c, \phi_c)\}_{c=1}^V$ constitutes a \emph{prior bank}, which is the generalization of the embedding matrix. In the deterministic, isotropic limit ($\Sigma_p^c \to \sigma^2 I$, $\phi_c$ absorbed), only the prior means survive and the prior bank reduces to $W_{\text{embed}} = [\mu_p^1, \ldots, \mu_p^V]^\top$, recovering the standard embedding matrix.
-
-\subsubsection{Dropout as Stochastic Source Selection.}
-\label{sec:dropout}
-
-Dropout \citep{srivastava2014dropout} randomly zeroes hidden units during training, providing regularization. The gauge-theoretic framework accommodates but does not uniquely predict this technique. Two variants admit natural interpretations.
-
-\emph{Attention dropout}, which randomly zeroes entries of the attention weight matrix $\beta_{ij}$, corresponds to stochastic masking of sources in the mixture-of-sources generative model. Rather than attending to all available sources, the agent randomly excludes a fraction during each training step. This can be formalized as drawing a random binary mask $m_j \sim \mathrm{Bernoulli}(1-p)$ and setting $\pi_j \to m_j \pi_j$ in \eqref{eq:mixture_softmax_general}, with subsequent renormalization. The effect is to perform approximate inference over a stochastically varying subset of the mixture components.
-
-\emph{Hidden dropout}, which zeroes components of the belief vector $\mu_i$, effectively increases the belief uncertainty by projecting onto random subspaces. In the Gaussian framework, zeroing component $k$ of $\mu_i$ with probability $p$ is equivalent to replacing the point belief $\mu_i$ with a mixture that marginalizes over the dropped dimensions, effectively inflating the covariance $\Sigma_i$ along the dropped directions. This increased uncertainty regularizes the KL divergences and softens attention, consistent with the known Bayesian interpretation of dropout as approximate variational inference \citep{gal2016dropout}.
-
-We emphasize that the framework \emph{accommodates} dropout as a regularization strategy but does not \emph{derive} it from the variational principle. The VFE itself provides its own regularization through the prior coupling term $\alpha_i D_{\mathrm{KL}}(q_i \| p_i)$ and the entropy of the attention distribution; whether additional stochastic regularization is necessary depends on the model's capacity relative to the data.
-
-\subsubsection{Gradient Clipping and Natural Gradients.}
-\label{sec:gradient_clipping}
-
-Gradient clipping, which bounds the norm of parameter updates, corresponds to the trust region constraint in natural gradient descent on the statistical manifold. The natural gradient update on the Gaussian manifold computes the whitened tangent vector $R = \Sigma^{-1/2}(\eta \nabla)\Sigma^{-1/2}$ and clips its Frobenius norm to a maximum step size $\rho$ (Appendix~E). This is a Riemannian trust region: it bounds the geodesic distance of each update, ensuring that the new belief remains in a neighborhood of the current belief as measured by the Fisher-Rao metric. Standard gradient clipping performs an analogous operation in the Euclidean parameter space, which can be understood as a flat-space approximation to the Riemannian trust region. Similarly, the adaptive learning rates in optimizers such as Adam \citep{kingma2014adam} approximate the diagonal of the Fisher information matrix, providing a computationally efficient approximation to the natural gradient that the full gauge-theoretic framework prescribes \citep{martens2020new,amari1998natural}.
 
 
 \subsection{Summary}
@@ -1713,15 +1635,7 @@ Figure~\ref{fig:per_head_heatmap} shows the per-head correlation structure acros
   \label{fig:cross_passage_stability}
 \end{figure}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\linewidth]{attention/figs/per_head_correlation_heatmap.png}
-  \caption{
-    \textbf{Per-head correlation heatmap ($12 \times 12$, layers vs.\ heads).}
-    Mean Pearson $r(\alpha, \beta)$ across 105 passages at $\tau = 19.0$.  Deeper layers (8--11) generally exhibit stronger correlations, consistent with more structured semantic representations in later layers.  The highest agreement occurs at Layer~2, Head~0 ($r = 0.999$) and the weakest at Layer~1, Head~6 ($r = 0.049$).
-  }
-  \label{fig:per_head_heatmap}
-\end{figure}
+
 
 \paragraph{Scope of the Validation.}
 An important caveat is in order. The high correlation between KL-based attention $\beta_{ij} \propto \exp(-\|Q_i - K_j\|^2/\tau)$ and dot-product attention $\alpha_{ij} \propto \exp(Q_i K_j^\top / \sqrt{d_k})$ follows in part from an algebraic identity: when key norms $\|K_j\|$ are approximately constant (as enforced by layer normalization in BERT), the squared Euclidean distance $\|Q_i - K_j\|^2 = \|Q_i\|^2 + \|K_j\|^2 - 2Q_i K_j^\top$ differs from $-2Q_i K_j^\top$ only by terms that are approximately constant under softmax. The non-trivial content of this validation is therefore not the correlation per se---that much is guaranteed by the algebra---but rather four quantitative predictions that the identity alone does not supply: (a) the optimal temperature $\tau \approx 2\sqrt{d_k}$, confirmed empirically at $\tau = 19.0$ (within 19\% of the prediction $2\sqrt{64} = 16$), whose value is fixed by the dimensional scaling of dot-product variance in the gauge framework; (b) the existence, sign, and magnitude of a residual key-norm bias, a prediction specific to the gauge-theoretic decomposition that has no counterpart in the algebraic identity; (c) the entropy matching $H(\beta) \approx H(\alpha)$ at the optimal temperature (Section~\ref{sec:entropy_analysis}), confirming that the temperature does not merely maximize correlation but recovers the correct distributional shape; and (d) the per-layer variation in correlation strength, which reflects representational structure learned during training and is not predicted by the mathematical identity alone. The multi-passage design (105 passages, all heads, full temperature sweep) ensures that these findings are not artifacts of any particular input---the cross-passage standard errors ($\mathrm{SE} < 0.02$ for all 144 heads) confirm reproducibility.
@@ -2004,42 +1918,11 @@ The gauge frames influence predictions through an indirect route: during each VF
 
 This analysis identifies increasing $K$ (with multi-head $\mathrm{GL}(d_{\text{head}})$ to control computational cost, since matrix exponentials remain $d_{\text{head}} \times d_{\text{head}}$) as the theoretically justified route to higher output capacity. Increasing VFE iterations and depth provides complementary gains by improving the transfer of gauge-encoded semantic structure into the observable belief means.
 
-\subsection{Transport-Only Learning: Uniform Attention at PPL 377}
-\label{sec:uniform_attention}
 
-A striking empirical finding provides direct evidence for the ``transport geometry over attention weighting'' hypothesis. We train a 1-layer $\mathrm{GL}(10)$ gauge VFE model ($K = 30$, context length $N = 64$, batch size 64) with the VFE dynamics active during both the E-step (belief inference) and the outer optimization loop. Throughout training, the attention entropy remains exactly frozen at $H(\beta) = 3.140$ nats with concentration $c = 0.090$---corresponding to a perfectly uniform attention distribution $\beta_{ij} \approx 1/N$ over all context positions. Despite the absence of any selective attention, the model achieves a validation perplexity of 377, reducing from $>$1{,}000 at initialization. The learning curve shows no sign of plateauing at 6{,}500 steps into a 50{,}000-step training run:
-
-\begin{table}[h]
-\centering
-\begin{tabular}{cccccc}
-\hline
-\textbf{Step} & \textbf{Val PPL} & \textbf{Val CE} & \textbf{BPC} & \textbf{Attn Entropy} & \textbf{Attn Conc.} \\
-\hline
-3{,}000 & 681 & 6.52 & 9.41 & 3.140 & 0.090 \\
-3{,}500 & 621 & 6.43 & 9.28 & 3.140 & 0.090 \\
-4{,}000 & 577 & 6.36 & 9.17 & 3.140 & 0.090 \\
-4{,}500 & 539 & 6.29 & 9.08 & 3.140 & 0.090 \\
-5{,}000 & 511 & 6.24 & 9.00 & 3.140 & 0.090 \\
-5{,}500 & 497 & 6.21 & 8.96 & 3.140 & 0.090 \\
-6{,}000 & 470 & 6.15 & 8.88 & 3.140 & 0.090 \\
-6{,}500 & 438 & 6.08 & 8.78 & 3.140 & 0.090 \\
-\hline
-\end{tabular}
-\caption{Validation metrics for the VFE-dynamic model with uniform attention. Attention entropy $H(\beta) = \log(N) = 3.140$ nats (for effective context $N \approx 23$ after masking) and concentration $c = 0.090$ remain exactly constant throughout training, while perplexity steadily decreases. All learning occurs through gauge transport $\Omega_{ij}$, covariance dynamics $\Sigma_i$, and belief mean evolution $\mu_i$---\emph{not} through selective attention.}
-\label{tab:uniform_attention}
-\end{table}
-
-Several observations merit emphasis:
-
-\paragraph{All learning is geometric.} The gradient norms during training confirm active learning in all variational parameters: belief means ($\|\nabla_\mu\| \sim 8 \times 10^{-3}$), covariances ($\|\nabla_\sigma\| \sim 5 \times 10^{-2}$), and gauge frames ($\|\nabla_\phi\| \sim 1 \times 10^{-1}$), with the gauge frame gradients consistently dominating. Since $\beta_{ij} \approx 1/N$ throughout, the VFE alignment gradient
-\begin{equation}
-\frac{\partial \mathcal{F}}{\partial \mu_i} \supset \frac{1}{N}\sum_j (\Omega_{ij}\Omega_{ij}^\top)^{-1}(\mu_i - \Omega_{ij}\mu_j)/\sigma^2
-\end{equation}
-depends \emph{entirely} on the transport operators $\Omega_{ij} = \exp(\phi_i)\exp(-\phi_j)$. The model thus learns a pure geometric message-passing scheme: the \emph{content} of inter-token communication (how beliefs are transformed) carries all the information, while the \emph{selectivity} of communication (which tokens attend to which) contributes nothing.
 
 \paragraph{Meta-agent emergence with uniform coupling.} The renormalization group metrics reveal incipient structure even under uniform attention. Two meta-agent clusters emerge (detected by spectral methods on the KL divergence matrix), with the inter-cluster KL divergence growing from 9.3 to 27.2 over training. The modularity $Q \approx 0.131$ remains modest, consistent with the uniform attention providing no preferential within-cluster coupling. This demonstrates that meta-agent structure can emerge from transport geometry alone, without the selective attention that would normally amplify intra-cluster communication.
 
-\paragraph{The attention symmetry-breaking problem.} The frozen attention entropy reveals a structural feature of the VFE dynamics: when beliefs $\mu_i$ and gauge frames $\phi_i$ are initialized symmetrically (or near-symmetrically), the pairwise KL divergences $D_{\mathrm{KL}}(q_i \| \Omega_{ij} q_j)$ that determine attention weights remain approximately equal across all pairs, maintaining the uniform distribution. While the gauge frames develop semantic structure through the alignment gradients (as confirmed by the active $\phi$ gradients), this structure does not break the symmetry of the \emph{pairwise} KL divergences sufficiently to differentiate attention weights. The model may require either (i) longer training for the gradually accumulating asymmetries in $\phi$ to eventually break attention symmetry, (ii) explicit symmetry-breaking perturbations in the attention computation, or (iii) positional information that provides an initial source of pairwise asymmetry. We note that PPL 377 already captures substantial linguistic structure (compared to random-chance PPL $\sim$50{,}000) using transport alone, suggesting that selective attention, when it emerges, will refine rather than create the model's language understanding.
+
 
 
 \section{Discussion}
@@ -2052,13 +1935,7 @@ This paper makes three nested claims, each supported by a corresponding set of r
 
 \paragraph{The unreduced framework as a language model.} The $\mathrm{GL}(20)$ gauge VFE achieves test perplexity 121.1 on WikiText-103 (Table~\ref{tab:glk_results}), surpassing the matched Kneser-Ney 5-gram baseline (PPL 134.8) without any neural components (no MLPs, activation functions, or learned attention projections). That gauge-covariant variational inference alone produces a functioning language model supports the explanatory claim that transformers succeed because they approximate this underlying mathematical structure.
 
-\paragraph{Transport geometry without selective attention.} The uniform-attention experiment (Section~\ref{sec:uniform_attention}) achieves PPL 377 with attention weights exactly frozen at $\beta_{ij} = 1/N$ throughout training. All learning occurs through gauge transport, covariance dynamics, and belief evolution---establishing a lower bound on how much of language modeling can be accomplished by transport geometry alone.
 
-\subsection{Transport Geometry as the Computational Substrate}
-
-The uniform-attention experiment (Section~\ref{sec:uniform_attention}) reveals that contextual information is encoded primarily in the transport operators $\Omega_{ij}$ rather than in selective attention weights. The gauge frames $\phi_i \in \mathbb{R}^{K^2}$ develop rich semantic structure (Section~5.3.2), yet the observation model $p(o \mid \mu_i)$ couples only to the $K$-dimensional belief means $\mu_i$. This is a structural consequence of gauge symmetry: the observation likelihood breaks gauge invariance by coupling to an external reference frame (the vocabulary), so it must depend only on the gauge-covariant belief means, not on the gauge frames that parameterize internal coordinate transformations. Including $\phi_i$ or $\Sigma_i$ in the observation model would introduce gauge-dependent coupling to external data, undermining this separation.
-
-Gauge-encoded information reaches predictions indirectly through the VFE alignment gradient, which drives $\phi$-dependent structure into $\mu$ at each iteration. The output capacity is therefore $K$-dimensional even though the full representational capacity encompasses $K + K^2$ dimensions. Increasing $K$, the number of VFE iterations, or the number of layers all serve to widen or deepen this information transfer channel.
 
 \subsection{Architectural Implications for Standard Transformers}
 
@@ -2148,7 +2025,7 @@ All experiments reported in the results section can be reproduced using the prov
 
 
 \section*{Acknowledgments}
-Claude Sonnet 4.5 was utilized for programming our variational free energy descent simulation suite.  All code was manually reviewed, corrected, and mathematically validated by the author.  Furthermore, Claude was utilized for typesetting figures, LaTeX equations, and general organizational and manuscript clarity advice.  The author emphasizes that Claude (or any other LLMs) played no role in the development or conceptual ideas of our theoretical framework. The author further declares no funding or conflicts of interest.
+Claude Opus 4.5/4.6 was utilized for programming our variational free energy descent simulation suite.  All code was manually reviewed, corrected, and mathematically validated by the author.  Furthermore, Claude was utilized for typesetting figures, LaTeX equations, and general organizational and manuscript clarity advice.  The author emphasizes that Claude (or any other LLMs) played no role in the development or conceptual ideas of our theoretical framework. The author further declares no funding or conflicts of interest.
 
 \appendix
 
@@ -2740,186 +2617,6 @@ Therefore, the forward KL plays the role of the canonical gauge-covariant coupli
 Reverse or symmetric divergences would violate at least one of these constraints: they either destroy exponential-family closure, break dual consistency $\big(C_{ij} = \partial F_i / \partial \beta_{ij}\big)$, or fail to respect the gauge-covariant comparison structure. Thus, the gauge-covariant free energy \eqref{eq:free_energy_final} naturally inherits the unique forward-KL alignment form as a direct consequence of its underlying variational geometry.
 
 
-
-\section{Agreement-Variable Construction of the Variational Free Energy}
-\label{app:agreement_variables}
-
-This appendix provides an alternative derivation of the variational free energy \eqref{eq:free_energy_final} from a normalized generative model with auxiliary agreement variables. This construction shows how the KL-based coupling terms emerge from gauge-transported Gaussian consistency constraints and provides the foundation for the dual-fiber (belief + model) alignment structure. The main text (Section~\ref{sec:free_energy_section}) states the free energy directly; the mixture-model derivation in Section~\ref{sec:mixture_derivation} provides the primary derivation of softmax attention weights.
-
-\subsection{Auxiliary Agreement Variables}
-
-To enforce consistency between agents after gauge transport, we introduce an auxiliary ``agreement'' variable for each ordered pair $(i,j)$:
-\begin{equation}
-z_{ij} \in \mathbb{R}^{d_q} \quad \text{(belief agreement)},
-\qquad
-w_{ij} \in \mathbb{R}^{d_p} \quad \text{(model agreement)}.
-\label{eq:agreement_vars}
-\end{equation}
-Here $z_{ij}$ represents ``what agent $i$ believes agent $j$'s belief looks like, after transporting $j$'s belief into $i$'s gauge frame,'' and similarly $w_{ij}$ for the model channel. These are latent mediators that will be integrated out, leaving an effective pairwise coupling.
-
-\subsection{Joint Generative Model}
-
-The auxiliary variable $z_{ij}$ is drawn from the product of Gaussians:
-\begin{equation}
-p(z_{ij} \mid k_i, k_j) \propto
-\mathcal{N}(z_{ij}; k_i, \Lambda_{ij}^{-1}) \cdot
-\mathcal{N}(z_{ij}; \Omega_{ij}k_j, \Lambda_{ij}^{-1}),
-\label{eq:belief_coupling_product}
-\end{equation}
-and similarly for model alignment:
-\begin{equation}
-p(w_{ij} \mid m_i, m_j) \propto
-\mathcal{N}(w_{ij}; m_i, \Gamma_{ij}^{-1}) \cdot
-\mathcal{N}(w_{ij}; \tilde{\Omega}_{ij}m_j, \Gamma_{ij}^{-1}),
-\label{eq:model_coupling_product}
-\end{equation}
-where $\Lambda_{ij} \succ 0$ and $\Gamma_{ij} \succ 0$ are belief and model alignment precisions, respectively.
-
-The full joint generative model is:
-\begin{equation}
-\begin{aligned}
-p&(\{k_i\},\{m_i\},\{z_{ij}\},\{w_{ij}\})\\
-&=\left[\prod_i p_i(k_i)\,r_i(m_i)\right]
-\times
-\left[\prod_{i,j}
-\mathcal{N}(z_{ij}\,;k_i,\Lambda_{ij}^{-1})
-\,\mathcal{N}(z_{ij}\,;\Omega_{ij}k_j,\Lambda_{ij}^{-1})\right]\\
-&\quad\times
-\left[\prod_{i,j}
-\mathcal{N}(w_{ij}\,;m_i,\Gamma_{ij}^{-1})
-\,\mathcal{N}(w_{ij}\,;\tilde{\Omega}_{ij}m_j,\Gamma_{ij}^{-1})\right].
-\end{aligned}
-\label{eq:joint_distribution}
-\end{equation}
-
-\subsection{Marginal Structure}
-\label{sec:marginal_mrf}
-
-Integrating out the auxiliary variables yields a pairwise Markov random field:
-\begin{equation}
-p(\{k_i\},\{m_i\}) = \frac{1}{Z}\prod_i p_i(k_i)\,r_i(m_i)
-\prod_{i,j} \exp\!\left(-\tfrac{\Lambda_{ij}}{4}\|k_i - \Omega_{ij}k_j\|^2\right)
-\exp\!\left(-\tfrac{\Gamma_{ij}}{4}\|m_i - \tilde{\Omega}_{ij}m_j\|^2\right).
-\label{eq:marginal_mrf}
-\end{equation}
-
-\subsection{Mean-Field Free Energy and Quadratic Forms}
-
-Under a mean-field posterior $q(\{k_i\},\{m_i\})=\prod_i q_i(k_i)\,s_i(m_i)$, the variational free energy expands to:
-\begin{equation}
-\begin{aligned}
-\mathcal{F}
-&=\sum_i D_{\mathrm{KL}}(q_i\,\|\,p_i)
-+\sum_i D_{\mathrm{KL}}(s_i\,\|\,r_i)\\
-&\quad+\frac{1}{4}\sum_{i,j}\mathbb{E}_{q_i q_j}
-\!\big[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)\big]\\
-&\quad+\frac{1}{4}\sum_{i,j}\mathbb{E}_{s_i s_j}
-\!\big[(m_i-\tilde{\Omega}_{ij}m_j)^\top\Gamma_{ij}(m_i-\tilde{\Omega}_{ij}m_j)\big]
--\mathbb{E}_q[\log p(o\,|\{k_i\},\{m_i\})].
-\end{aligned}
-\label{eq:free_energy_expanded}
-\end{equation}
-
-\subsection{Relating Quadratic Forms to KL Divergences}
-
-For the precision choice $\Lambda_{ij}:=\tau^{(q)}_{ij}\,(\Omega_{ij}\Sigma_{q,j}\Omega_{ij}^\top)^{-1}$ (and analogously for $\Gamma_{ij}$), and under the alignment-regime approximation where $\Sigma_i \approx \Omega_{ij}\Sigma_j\Omega_{ij}^\top$, the quadratic expectations reduce to:
-\begin{equation}
-\frac{1}{4}\mathbb{E}_{q_i q_j}
-[(k_i-\Omega_{ij}k_j)^\top\Lambda_{ij}(k_i-\Omega_{ij}k_j)]
-\approx
-\frac{\tau^{(q)}_{ij}}{2}\,D_{\mathrm{KL}}(q_i\,\|\,\Omega_{ij}q_j)+\text{const}.
-\label{eq:belief_kl_relation}
-\end{equation}
-
-Defining normalized alignment weights $\beta_{ij}:=\tau^{(q)}_{ij}/2$ and $\gamma_{ij}:=\tau^{(p)}_{ij}/2$, and substituting, we recover the variational free energy \eqref{eq:free_energy_final} of the main text.
-
-\textbf{Remark.} The precision choice and alignment-regime approximation are specific to this derivation. The mixture-model derivation (Section~\ref{sec:mixture_derivation}) obtains the same KL-based coupling \emph{exactly}, without these assumptions, by formulating attention as variational inference over a mixture of gauge-transported sources.
-
-
-\section{Variational Gradient Descent: Implementation and Numerical Methods}
-The variational free energy minimization is implemented through a sophisticated gradient descent scheme that respects the intricate geometric structure of the multi-agent system. At each simulation step, the algorithm orchestrates a sequence of coordinated field updates across all dynamic variables—the statistical parameters $(\mu_i, \Sigma_i)$ for both belief and model fibers, the gauge frame fields $(\phi_i, \tilde{\phi}_i)$, and optionally the global connection field $A_\mu$—while maintaining numerical stability on the constrained manifolds where these quantities naturally live.
-
-\subsection{Gradient Accumulation and Energy Terms}
-The core computational pipeline begins with gradient accumulation, where each agent's variational gradient is constructed by summing contributions from multiple energy terms. For the statistical parameters, we compute gradients arising from the self-consistency term $D_{\text{KL}}(q_i \| p_i)$, the belief alignment coupling $\sum_j \beta_{ij} D_{\text{KL}}(q_i \| \Omega_{ij} q_j)$, the model alignment coupling $\sum_j \gamma_{ij} D_{\text{KL}}(s_i \| \tilde{\Omega}_{ij} s_j)$, and the observation likelihood $-\mathbb{E}_{q_i}[\log p(o_i | k_i)]$. Each of these terms contributes a distinct gradient component that must be carefully transported, aggregated, and symmetrized before application.
-
-The alignment terms are particularly intricate, requiring neighbor iteration over all overlapping agent pairs, computation of gauge-transported statistics via the parallel transport operators $\Omega_{ij}$, and evaluation of the KL divergence gradients in the appropriate local frames. These gradients are accumulated into per-agent "inboxes" during a first pass, then drained and combined with self-energy gradients in a second pass to yield the total gradient for each agent.
-
-\subsection{Natural Gradient Descent on the Gaussian Manifold}
-A major aspect of our implementation is the use of natural gradient descent for the statistical parameters, which exploits the information-geometric structure of the Gaussian manifold. Rather than treating the covariance matrices $\Sigma_i$ as Euclidean variables, we recognize them as points on the manifold of symmetric positive-definite matrices, equipped with the Fisher-Rao metric. The natural gradient at a point $\Sigma$ on this manifold is obtained by applying the inverse Fisher metric to the Euclidean gradient, yielding an intrinsic tangent vector that respects the manifold's curved geometry.
-
-In our vectorized implementation, this transformation is performed via \texttt{apply\_natural\_gradient\_batch}, which computes the whitened gradient
-
-\begin{equation}
-R = \Sigma^{-1/2} (\eta \cdot \nabla) \Sigma^{-1/2}
-\end{equation}
-
-where $\nabla$ is the raw Euclidean gradient and $\eta$ is the learning rate. This whitening procedure ensures that the gradient step is affine-invariant—the same step size produces comparable effects regardless of the current scale of the covariance matrix. Following the computation of the tangent vector $R$, we apply a trust-region constraint by clipping its Frobenius norm to a maximum relative step size $\rho$, typically set to values between $0.1$ and $0.5$. This prevents excessively large updates that could destabilize the manifold structure or lead to ill-conditioned covariances.
-
-\subsection{Manifold Retraction for Covariance Matrices}
-The actual manifold retraction—the process of mapping the tangent vector back to a valid point on the manifold—is performed using the affine-invariant exponential map by default. The exponential map is computed as
-
-\begin{equation}
-\Sigma_{k+1} = \Sigma_k^{1/2} \exp(R) \Sigma_k^{1/2},
-\end{equation}
-
-where the matrix exponential $\exp(R)$ is evaluated via eigendecomposition: $R = U \Lambda U^\top$ yields $\exp(R) = U \exp(\Lambda) U^\top$ with component-wise exponentials applied to the eigenvalues. This procedure is provably SPD-preserving provided $\Sigma_k$ is SPD and $R$ is symmetric, which our implementation guarantees through explicit symmetrization at multiple stages.
-
-Additional safeguards include post-retraction sanitization via
-\texttt{sanitize\_sigma}, which symmetrizes the result, raises on any
-floating-point anomalies (NaNs), and applies a spectral floor to the
-eigenvalues to ensure they remain above a minimum threshold
-$\epsilon_{\mathrm{SPD}}\!\sim\!10^{-8}$. This spectral regularization is
-essential for preventing numerical collapse of the covariance matrices
-during prolonged gradient descent, particularly in regions where the
-free-energy landscape becomes very flat.
-
-\subsection{Gauge Frame Dynamics on $\mathrm{SO}(3)$}
-The gauge frame fields $\phi_i, \tilde{\phi}_i \in \mathfrak{so}(3)$ parameterize local gauge frames as $U_i = \exp(\phi_i)$. Gradients are computed via the differential of the matrix exponential:
-\begin{equation}
-\delta(\exp \phi) = \exp(\phi) \cdot d\exp_\phi(\delta \phi),
-\end{equation}
-with co-vectors projected back to tangent vectors using the inverse of $d\exp_\phi$ (computed via the Baker-Campbell-Hausdorff formula truncated at fourth order). The Fisher metric inverse provides a natural Riemannian preconditioner. Updates are retracted to the principal domain $\|\phi\| < \pi$ to avoid degeneracies of the exponential map.
-
-\subsection{Convergence Criteria and Numerical Stability}
-A run is considered converged when $|\Delta \mathcal{F}| < 10^{-5}$ for at least 200 consecutive steps. Numerical safeguards include: spectral floor enforcement ($\epsilon_{\mathrm{SPD}} \sim 10^{-8}$) and condition number capping ($10^8$--$10^{10}$) for covariance matrices; approximate orthogonality verification for $\mathrm{SO}(3)$ transport operators via QR re-orthogonalization when $\|\Omega^\top\Omega - I\|_F$ exceeds tolerance (a simulation choice, not a theoretical necessity per Theorem~\ref{thm:glk_invariance}); energy budget tracking to verify approximate conservation; and stability monitoring for NaN detection and gradient explosion prevention. Gradients are accumulated in double precision (float64) and cast to single precision (float32) for storage.
-
-Parallelization across agents uses process-based parallelism with shared memory views and disk-backed caches for precomputed quantities. Full implementation details are available in the code repository.
-
-\subsection{Computational Requirements}
-The simulations were performed on a workstation with an AMD Ryzen 9900x processor and 64 GB RAM. Typical simulation runs with $N=8$ agents over a $20 \times 20$ spatial grid required approximately 60 minutes for convergence (500-800 steps). Memory usage scales as $\mathcal{O}(N \cdot H_{\text{grid}} \cdot W_{\text{grid}} \cdot K^2)$ where $H_{\text{grid}} \times W_{\text{grid}}$ is the spatial resolution and $K$ is the fiber dimension.
-
-\subsection{Hyperparameter Configuration}
-All hyperparameters used in the experiments are documented in \texttt{config.py} within the repository. Key parameters include:
-
-\begin{table}[h]
-\centering
-\renewcommand{\arraystretch}{1.2}
-\setlength{\tabcolsep}{6pt}
-\begin{tabularx}{\textwidth}{lll}
-\hline
-\textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
-\hline
-$\eta_{\mu,q}$ & $1 \times 10^{-1}$ & Belief mean learning rate \\
-$\eta_{\Sigma,q}$ & $1 \times 10^{-1}$ & Belief covariance learning rate \\
-$\eta_\phi$ & $1 \times 10^{-1}$ & Gauge frame learning rate \\
-$\tau$ & $1.0$ & Attention temperature \\
-$\alpha$ & $1.0$ & Self-consistency weight \\
-$\epsilon_{\text{SPD}}$ & $1 \times 10^{-8}$ & Covariance regularization floor \\
-$\rho$ & $0.3$ & Trust region radius \\
-\hline
-\end{tabularx}
-\caption{Standard hyperparameter configuration for all experiments.}
-\label{tab:hyperparams}
-\end{table}
-
-\subsection{Random Seed Reproducibility}
-All experiments use seeded random number generators (NumPy \texttt{RandomState}). 
-The seeds used for each figure are documented in the repository's
-\texttt{experiments/} directory. To reproduce Figure~\ref{fig:mu_q_center_vacuum}, run:
-
-\begin{lstlisting}
-python generalized_simulation.py --config configs/vacuum_exp.py --seed 241
-\end{lstlisting}
 
 
 
