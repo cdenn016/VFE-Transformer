@@ -1,4 +1,4 @@
-# Gauge-Theoretic Transformer
+# Gauge-Theoretic Transformer - CURRENTLY IN FLUX
 
 A research framework implementing gauge-covariant variational free energy (VFE) minimization for language modeling. This codebase accompanies the manuscript:
 
