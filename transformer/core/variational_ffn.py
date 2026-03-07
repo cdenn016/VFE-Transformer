@@ -687,7 +687,7 @@ def _compute_vfe_gradients_chunked(
             # Sigma alignment gradient
             if compute_sigma_align_grad:
                 sigma_j_inv_diag = 1.0 / sigma_j_transported_diag  # (B, n_i, n_j, K)
-                sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
+                sigma_i_inv = 1.0 / sigma_i.clamp(min=eps)
                 sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1)  # view
                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
@@ -1958,8 +1958,12 @@ class VariationalFFNDynamic(nn.Module):
                             diagonal_covariance=is_diagonal,
                             mask_self_attention=self.mask_self_attention,
                         )
-                        # compute_attention_weights with return_kl=True always returns a tuple
-                        beta_phi_h, kl_h = beta_phi_h_result
+                        # compute_attention_weights with return_kl=True returns (beta, kl) tuple
+                        if isinstance(beta_phi_h_result, tuple):
+                            beta_phi_h, kl_h = beta_phi_h_result
+                        else:
+                            beta_phi_h = beta_phi_h_result
+                            kl_h = torch.zeros_like(beta_phi_h)
                         alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
                         block_start = block_end
                 else:
@@ -1980,8 +1984,12 @@ class VariationalFFNDynamic(nn.Module):
                         mask_self_attention=self.mask_self_attention,
                     )
 
-                    # compute_attention_weights with return_kl=True always returns a tuple
-                    beta_phi, kl_matrix = beta_for_phi_result
+                    # compute_attention_weights with return_kl=True returns (beta, kl) tuple
+                    if isinstance(beta_for_phi_result, tuple):
+                        beta_phi, kl_matrix = beta_for_phi_result
+                    else:
+                        beta_phi = beta_for_phi_result
+                        kl_matrix = torch.zeros_like(beta_phi)
 
                     alignment_loss = self.lambda_belief * (beta_phi * kl_matrix).sum()
 
@@ -2052,11 +2060,12 @@ class VariationalFFNDynamic(nn.Module):
                         diagonal_covariance=is_diagonal,
                         mask_self_attention=self.mask_self_attention,
                     )
+                    # compute_attention_weights with return_kl=True returns (beta, kl) tuple
                     if isinstance(beta_phi_h_result, tuple):
                         beta_phi_h, kl_h = beta_phi_h_result
                     else:
                         beta_phi_h = beta_phi_h_result
-                        kl_h = beta_phi_h
+                        kl_h = torch.zeros_like(beta_phi_h)
                     alignment_loss = alignment_loss + self.lambda_belief * (beta_phi_h * kl_h).sum()
                     block_start = block_end
             else:

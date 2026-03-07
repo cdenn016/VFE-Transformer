@@ -360,23 +360,21 @@ def safe_inv_cholesky(Sigma: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 def TUFF_sanitize_sigma(
     Sigma: np.ndarray,
     debug: bool = True,
-    eig_floor: float | None = None,
-    cond_cap: float | None = None,
-    eig_cap: float | None = None,
-    trace_target: float | None = None,
-    eps: float | None = None,
+    eig_floor: Optional[float] = None,
+    cond_cap: Optional[float] = None,
+    eig_cap: Optional[float] = None,
+    trace_target: Optional[float] = None,
+    eps: Optional[float] = None,
 ) -> np.ndarray:
     """
     Symmetrize, scrub NaN/Inf, and project to SPD via eigen clipping.
     Prints caller info on failure or diagnostic messages.
     """
-    import config 
-
     caller = _caller_info(2)  # identify where sanitize_sigma was called from
     in_dtype = Sigma.dtype
     S = np.asarray(Sigma, dtype=np.float64)  # work in fp64 for eig, cast back at end
 
-    eig_floor = float(eig_floor if eig_floor is not None else getattr(config, "sigma_eig_floor", 1e-6))
+    eig_floor = float(eig_floor if eig_floor is not None else 1e-6)
     cond_cap  = None if cond_cap is None else float(cond_cap)
     eig_cap   = None if eig_cap   is None else float(eig_cap)
     trace_target = None if trace_target is None else float(trace_target)

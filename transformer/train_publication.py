@@ -2024,6 +2024,7 @@ def run_single_experiment(
         sigma_lr=config['sigma_lr'],
         phi_lr=config['phi_lr'],
         attention_lr=config.get('attention_lr', config['mu_lr'] if ffn_mode == 'standard' else config['phi_lr']),
+        ffn_lr=config.get('ffn_lr', 0.001),
         output_lr=config.get('output_lr', 0.001),
 
         weight_decay=config['weight_decay'],
