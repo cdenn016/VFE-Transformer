@@ -113,7 +113,8 @@ CONFIG = {
     # Prior coupling: priors learn from each other via KL(p_i || Ω_ij·p_j)
     # CRITICAL: Must be True for gauge evolution! (∂F/∂φ includes prior term)
     'prior_coupling_enabled': True,  # Was False - MUST be True!
-    'lambda_prior': 0.1,
+    'lambda_prior': 0.1,              # Model coupling: γ_ij·KL(s_i||Ω_ij·s_j)
+    'lambda_hyperprior': 0.1,         # Hyper-prior: KL(s_i||h) prevents memorization
 
     # Gradient-based prior updates: use VFE gradient instead of EMA
     'gradient_prior_updates': True,
@@ -403,6 +404,7 @@ def main():
         # Advanced FEP features
         prior_coupling_enabled=config.get('prior_coupling_enabled', False),
         lambda_prior=config.get('lambda_prior', 0.1),
+        lambda_hyperprior=config.get('lambda_hyperprior', 0.1),
         gradient_prior_updates=config.get('gradient_prior_updates', False),
         prior_grad_lr=config.get('prior_grad_lr', 0.01),
         gauge_evolution_enabled=config.get('gauge_evolution_enabled', False),
