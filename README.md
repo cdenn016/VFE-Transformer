@@ -7,6 +7,25 @@ A research framework implementing gauge-covariant variational free energy (VFE) 
 
 ## Core Thesis
 
+                    h (hyper-prior)
+                    │
+                    │ KL(s||h) — regularization
+                    ▼
+    s_i = self.prior_mu[i]  ◄──── γ·KL(s_i||Ω_ij·s_j) ────► s_j
+    (position MODEL,                    (model coupling)
+     slow timescale)
+                    │
+                    │ p = w·π_token + (1-w)·s
+                    ▼
+              p_i (PRIOR)
+                    │
+                    │ α·KL(q||p)
+                    ▼
+         q_i (beliefs, fast)  ◄──── β_ij·KL(q_i||Ω_ij·q_j) ────► q_j
+                                          (attention)
+
+
+
 Language is a dynamic informational system: speakers encode and decode beliefs under uncertainty, and language models learn the statistical structure of this process. The mathematical framework natural to such systems---gauge-covariant variational free energy minimization over communicating agents on a statistical fiber bundle---explains why attention mechanisms work.
 
 Standard transformer attention, the `1/sqrt(d_k)` scaling, layer normalization, and backpropagation all emerge as consequences of a single variational principle. The standard attention rule
