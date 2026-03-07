@@ -1,0 +1,36 @@
+From 697cf60f9d8d2c695416a234c2506fcda77ab8f4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Mar 2026 18:23:38 +0000
+Subject: [PATCH] Fix duplicate dictionary key and bad indentation in
+ test_model.py
+
+test_config_diagonal_covariance had 'use_diagonal_covariance' specified
+twice (the second overwriting the first), plus incorrect indentation on
+the last two entries. Removed the duplicate key (model uses
+'diagonal_covariance' not 'use_diagonal_covariance') and fixed
+indentation.
+
+https://claude.ai/code/session_01Wjg1gvRNYdq7eoJQqZ3T9H
+---
+ tests/transformer/test_model.py | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/tests/transformer/test_model.py b/tests/transformer/test_model.py
+index f56c489..84d5b16 100644
+--- a/tests/transformer/test_model.py
++++ b/tests/transformer/test_model.py
+@@ -396,10 +396,8 @@ class TestGaugeTransformerLMConfigurations:
+             'max_seq_len': 32,
+             'kappa_beta': 1.0,
+             'diagonal_covariance': True,
+-            'use_diagonal_covariance': True,
+             'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
+-                'use_diagonal_covariance': True,
+-                'ffn_mode': 'VFE_dynamic',
++            'ffn_mode': 'VFE_dynamic',
+         }
+         model = GaugeTransformerLM(config)
+         input_ids = torch.randint(0, 100, (2, 16))
+-- 
+2.43.0
+

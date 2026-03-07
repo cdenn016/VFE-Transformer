@@ -1,0 +1,223 @@
+From ca0effc4299dc65ac52b83fa35126aea0c1f3d6a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 4 Mar 2026 19:29:46 +0000
+Subject: [PATCH] Implement RoPE as position-dependent SO(2)^{K/2} gauge
+ rotations
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+RoPE (Rotary Position Embeddings) applies position-dependent rotations
+to belief means μ before computing KL divergences in attention:
+
+  μ'_i = R(θ_i) · μ_i  where R(θ) ∈ SO(2)^{K/2}
+
+This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i)
+without affecting gauge transport Ω_ij or message aggregation values.
+
+As derived in GL(K)_attention.tex §3, RoPE corresponds to restricting
+the full GL(K) gauge to the SO(2)^{K/2} subgroup with fixed frequencies:
+  φ_i^{pos} = diag(i·θ_1·J, i·θ_2·J, ..., i·θ_{K/2}·J)
+
+Config: use_rope=False (default), rope_base=10000.0
+
+https://claude.ai/code/session_01GtmWd4jSA59aLejX5rtdK7
+---
+ transformer/core/attention.py | 80 +++++++++++++++++++++++++++++++++++
+ transformer/core/blocks.py    | 11 +++++
+ transformer/core/model.py     |  3 ++
+ 3 files changed, 94 insertions(+)
+
+diff --git a/transformer/core/attention.py b/transformer/core/attention.py
+index 91dfcdd..cee4a4c 100644
+--- a/transformer/core/attention.py
++++ b/transformer/core/attention.py
+@@ -86,6 +86,67 @@ __all__ = [
+ ]
+ 
+ 
++# =============================================================================
++# Rotary Position Embeddings (RoPE) for KL-Divergence Attention
++# =============================================================================
++# RoPE applies position-dependent SO(2)^{K/2} rotations to belief means μ
++# before computing KL divergences. This makes attention position-sensitive
++# without affecting gauge transport Ω_ij.
++#
++# In the gauge-theoretic framework (see GL(K)_attention.tex §3):
++#   Ω_ij^{RoPE} = R(θ_{j-i}) · Ω_ij^{content}
++# where R(θ) ∈ SO(2)^{K/2} ⊂ GL(K) is the position-dependent rotation.
++# =============================================================================
++
++def _build_rope_freqs(K: int, base: float = 10000.0,
++                      device: torch.device = None,
++                      dtype: torch.dtype = None) -> torch.Tensor:
++    """Compute RoPE frequency bands for K-dimensional beliefs.
++
++    Returns:
++        freqs: (K//2,) inverse frequency bands
++    """
++    half_K = K // 2
++    freqs = 1.0 / (base ** (torch.arange(0, half_K, device=device, dtype=dtype) / half_K))
++    return freqs
++
++
++def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
++    """Apply Rotary Position Embeddings to belief means.
++
++    Rotates consecutive pairs of dimensions by position-dependent angles,
++    making KL divergences sensitive to relative position.
++
++    Args:
++        mu: (B, N, K) belief means
++        base: RoPE frequency base (default 10000.0)
++
++    Returns:
++        mu_rotated: (B, N, K) position-rotated belief means
++    """
++    B, N, K = mu.shape
++    half_K = K // 2
++
++    # Compute position-dependent angles: θ_n(pos) = pos * freq_n
++    freqs = _build_rope_freqs(K, base, device=mu.device, dtype=mu.dtype)  # (K//2,)
++    positions = torch.arange(N, device=mu.device, dtype=mu.dtype)  # (N,)
++    angles = torch.outer(positions, freqs)  # (N, K//2)
++
++    cos_angles = torch.cos(angles)  # (N, K//2)
++    sin_angles = torch.sin(angles)  # (N, K//2)
++
++    # Split μ into even/odd pairs and apply 2D rotation
++    mu_even = mu[:, :, :2*half_K:2]   # (B, N, K//2) - dims 0,2,4,...
++    mu_odd = mu[:, :, 1:2*half_K:2]   # (B, N, K//2) - dims 1,3,5,...
++
++    # R(θ) @ [x, y]^T = [x·cos(θ) - y·sin(θ), x·sin(θ) + y·cos(θ)]
++    mu_rotated = mu.clone()
++    mu_rotated[:, :, :2*half_K:2] = mu_even * cos_angles - mu_odd * sin_angles
++    mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_angles + mu_odd * cos_angles
++
++    return mu_rotated
++
++
+ # =============================================================================
+ # Sparse Attention Patterns
+ # =============================================================================
+@@ -255,6 +316,9 @@ def compute_attention_weights(
+     mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
+     # Gauge group control
+     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
++    # Rotary Position Embeddings (RoPE)
++    use_rope: bool = False,            # If True, apply RoPE rotations to μ before KL computation
++    rope_base: float = 10000.0,        # RoPE frequency base
+ ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+     """
+     Compute attention weights from KL divergences (0D version).
+@@ -331,6 +395,14 @@ def compute_attention_weights(
+     device = mu_q.device
+     dtype = mu_q.dtype
+ 
++    # =========================================================================
++    # RoPE: Apply position-dependent SO(2)^{K/2} rotations to belief means
++    # This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i).
++    # Applied ONLY to attention scores, NOT to message aggregation values.
++    # =========================================================================
++    if use_rope:
++        mu_q = _apply_rope(mu_q, base=rope_base)
++
+     # =========================================================================
+     # Compute all pairwise KL divergences: KL(q_i || Ω_ij[q_j])
+     # Helper functions return KL tensors (not in-place) to preserve autograd graph
+@@ -1896,6 +1968,8 @@ class IrrepMultiHeadAttention(nn.Module):
+         per_head_kappa: bool = False,  # If True, learn separate κ_h per head
+         use_output_projection: bool = False,  # If True, add W_O linear projection after heads
+         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
++        use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
++        rope_base: float = 10000.0,  # RoPE frequency base
+     ):
+         """
+         Initialize irrep-structured multi-head attention.
+@@ -1937,6 +2011,8 @@ class IrrepMultiHeadAttention(nn.Module):
+         self.use_identity_transport = use_identity_transport
+         self.mask_self_attention = mask_self_attention
+         self.enforce_orthogonal = enforce_orthogonal
++        self.use_rope = use_rope
++        self.rope_base = rope_base
+ 
+         # Build irrep block structure
+         self.irrep_dims = []
+@@ -2231,6 +2307,8 @@ class IrrepMultiHeadAttention(nn.Module):
+                     use_identity_transport=self.use_identity_transport,
+                     mask_self_attention=self.mask_self_attention,
+                     enforce_orthogonal=self.enforce_orthogonal,
++                    use_rope=self.use_rope,
++                    rope_base=self.rope_base,
+                 )  # (B, N, N), (B, N, N)
+                 all_attention_weights.append(beta_head)
+                 all_kl_matrices.append(kl_head)
+@@ -2251,6 +2329,8 @@ class IrrepMultiHeadAttention(nn.Module):
+                     use_identity_transport=self.use_identity_transport,
+                     mask_self_attention=self.mask_self_attention,
+                     enforce_orthogonal=self.enforce_orthogonal,
++                    use_rope=self.use_rope,
++                    rope_base=self.rope_base,
+                 )  # (B, N, N)
+                 kl_head = None  # Not computed
+ 
+diff --git a/transformer/core/blocks.py b/transformer/core/blocks.py
+index 03d6c60..5db50e0 100644
+--- a/transformer/core/blocks.py
++++ b/transformer/core/blocks.py
+@@ -126,6 +126,9 @@ class GaugeTransformerBlock(nn.Module):
+         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
+         # Cross-head coupling
+         cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
++        # RoPE (Rotary Position Embeddings)
++        use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
++        rope_base: float = 10000.0,  # RoPE frequency base
+     ):
+         """
+         Initialize gauge transformer block.
+@@ -227,6 +230,8 @@ class GaugeTransformerBlock(nn.Module):
+             per_head_kappa=per_head_kappa,
+             use_output_projection=use_output_projection,
+             irrep_dims_override=ffn_irrep_dims if (gauge_group == 'GLK' and cross_head_perm is not None) else None,
++            use_rope=use_rope,
++            rope_base=rope_base,
+         )
+ 
+         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
+@@ -484,6 +489,9 @@ class GaugeTransformerStack(nn.Module):
+         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
+         # Cross-head coupling
+         cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
++        # RoPE (Rotary Position Embeddings)
++        use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
++        rope_base: float = 10000.0,  # RoPE frequency base
+     ):
+         """
+         Initialize stack of transformer blocks.
+@@ -583,6 +591,9 @@ class GaugeTransformerStack(nn.Module):
+                 multihead_vfe=multihead_vfe,
+                 # Cross-head coupling
+                 cross_head_perm=cross_head_perm,
++                # RoPE
++                use_rope=use_rope,
++                rope_base=rope_base,
+             )
+             for _ in range(n_layers)
+         ])
+diff --git a/transformer/core/model.py b/transformer/core/model.py
+index 42f8ad2..facda5d 100644
+--- a/transformer/core/model.py
++++ b/transformer/core/model.py
+@@ -474,6 +474,9 @@ class GaugeTransformerLM(nn.Module):
+             multihead_vfe=config.get('multihead_vfe', False),
+             # Cross-head coupling
+             cross_head_perm=getattr(self, '_cross_head_perm', None),
++            # RoPE (Rotary Position Embeddings)
++            use_rope=config.get('use_rope', False),
++            rope_base=config.get('rope_base', 10000.0),
+         )
+ 
+         # =================================================================
+-- 
+2.43.0
+

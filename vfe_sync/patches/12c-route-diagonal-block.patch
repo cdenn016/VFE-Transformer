@@ -1,0 +1,42 @@
+From b8bb03b2080f1e1bd694140290eeacd722190893 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 5 Mar 2026 02:13:51 +0000
+Subject: [PATCH] Route diagonal+irrep_dims to block-diagonal path in
+ compute_attention_weights
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+compute_attention_weights has its own routing that bypasses
+compute_kl_matrix, so the block-diagonal diagonal path was never
+reached. The diagonal path was still materializing full (B,N,N,K,K)
+Omega instead of processing small d×d blocks per irrep.
+
+https://claude.ai/code/session_017JmAhA6GzxuEk5QF4Y3cQG
+---
+ transformer/core/attention.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/transformer/core/attention.py b/transformer/core/attention.py
+index 425629f..6bbd210 100644
+--- a/transformer/core/attention.py
++++ b/transformer/core/attention.py
+@@ -419,7 +419,14 @@ def compute_attention_weights(
+     # MEMORY-EFFICIENT PATHS (NEW!)
+     # Priority: block-diagonal > chunked > diagonal > full
+     # =========================================================================
+-    if irrep_dims is not None and not diagonal_covariance:
++    if irrep_dims is not None and diagonal_covariance:
++        # BLOCK-DIAGONAL + DIAGONAL MODE: Best of both worlds!
++        # Block processing for small Omega + diagonal KL formulas (no inv/Cholesky)
++        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
++            mu_q, sigma_q, phi, generators, irrep_dims,
++            enforce_orthogonal=enforce_orthogonal
++        )
++    elif irrep_dims is not None and not diagonal_covariance:
+         # BLOCK-DIAGONAL MODE: Principled + memory-efficient!
+         # Uses O(N² × Σᵢdᵢ²) instead of O(N² × K²) - massive savings!
+         if chunk_size is not None:
+-- 
+2.43.0
+

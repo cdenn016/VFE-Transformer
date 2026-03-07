@@ -1,0 +1,31 @@
+From ed086191d54a2fd665c40ab6691dd41ea96f115f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 5 Mar 2026 14:57:09 +0000
+Subject: [PATCH] Fix NameError: restore sigma_j_reg and I_d for
+ Cholesky/logdet after _safe_spd_inv
+
+The _safe_spd_inv refactor removed the local `sigma_j_reg = sigma_j_transported + eps*I`
+assignment, but downstream Cholesky (logdet) computation still needs the regularized matrix.
+Restore both `I_d` and `sigma_j_reg` as local variables alongside the _safe_spd_inv call.
+
+https://claude.ai/code/session_011wk1LywVCwdT2hGGHoQYPp
+---
+ transformer/core/variational_ffn.py | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/transformer/core/variational_ffn.py b/transformer/core/variational_ffn.py
+index a315e7e..7ea75e3 100644
+--- a/transformer/core/variational_ffn.py
++++ b/transformer/core/variational_ffn.py
+@@ -354,6 +354,8 @@ def _compute_vfe_gradients_block_diagonal(
+             del Omega_chunk
+ 
+             # Regularize and invert (adaptive regularization for numerical stability)
++            I_d = torch.eye(d, device=device, dtype=dtype)
++            sigma_j_reg = sigma_j_transported + eps * I_d
+             sigma_j_inv = _safe_spd_inv(sigma_j_transported, eps=eps)  # (B, C, N, d, d)
+ 
+             # Delta mu for this block (query chunk) - contiguous to avoid view issues
+-- 
+2.43.0
+

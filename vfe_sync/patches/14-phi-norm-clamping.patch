@@ -1,0 +1,106 @@
+From f94c15c6551f732500abbe544456d0c1b5e60110 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 4 Mar 2026 22:13:20 +0000
+Subject: [PATCH] Centralize phi norm clamping in stable_matrix_exp_pair
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Root cause: large phi → large phi_matrix → matrix_exp overflows to NaN
+→ NaN in Ω → NaN in Ω Σ Ω^T → Cholesky and eigh both fail.
+
+Fix: clamp ‖M‖_F ≤ 10 inside stable_matrix_exp_pair before calling
+matrix_exp. This is a single choke point used by attention, VFE FFN,
+and all other transport computations. Gradient flows through the
+scaling factor so phi still gets signal to shrink.
+
+Also adds NaN guard in _compute_kl_matrix_torch: replaces NaN
+covariance entries with identity before attempting Cholesky/eigh.
+
+https://claude.ai/code/session_01GtmWd4jSA59aLejX5rtdK7
+---
+ transformer/core/attention.py   | 16 ++++++++++++++++
+ transformer/core/gauge_utils.py | 20 ++++++++++++++++----
+ 2 files changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/transformer/core/attention.py b/transformer/core/attention.py
+index 986e448..124ee31 100644
+--- a/transformer/core/attention.py
++++ b/transformer/core/attention.py
+@@ -785,6 +785,16 @@ def _compute_kl_matrix_torch(
+     Sigma_i_reg = Sigma_i + eps * I
+     Sigma_transported_reg = Sigma_transported + eps * I
+ 
++    # NaN guard: replace any NaN entries with identity covariance.
++    # NaNs propagate from matrix_exp overflow when phi grows very large.
++    nan_mask = torch.isnan(Sigma_transported_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
++    if nan_mask.any():
++        Sigma_transported_reg = torch.where(
++            nan_mask.unsqueeze(-1).unsqueeze(-1),
++            I.expand_as(Sigma_transported_reg),
++            Sigma_transported_reg,
++        )
++
+     try:
+         # Cholesky of transported covariances (prior in KL)
+         L_p = torch.linalg.cholesky(Sigma_transported_reg)
+@@ -1004,6 +1014,12 @@ def _compute_kl_matrix_diagonal(
+         # Compute transport operators
+         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
+ 
++        # Clamp phi_matrix norm to prevent matrix_exp overflow → NaN
++        phi_norm = phi_matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
++        max_norm = 10.0
++        scale = (max_norm / phi_norm).clamp(max=1.0)
++        phi_matrix = phi_matrix * scale
++
+         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
+ 
+         # Re-orthogonalization for SO(K) if requested
+diff --git a/transformer/core/gauge_utils.py b/transformer/core/gauge_utils.py
+index 5867e86..0e5eb43 100644
+--- a/transformer/core/gauge_utils.py
++++ b/transformer/core/gauge_utils.py
+@@ -15,12 +15,16 @@ from typing import Tuple
+ def stable_matrix_exp_pair(
+     matrix: torch.Tensor,
+     dim_threshold: int = 8,
++    max_norm: float = 10.0,
+ ) -> Tuple[torch.Tensor, torch.Tensor]:
+-    """Compute exp(M) and exp(-M) with float64 upcasting for numerical stability.
++    """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
+ 
+-    For GL(K) gauge groups with K >= dim_threshold, upcasts to float64 before
+-    computing the matrix exponential to prevent NaN from Padé scaling-squaring
+-    overflow when phi values grow large.
++    Two stability measures:
++    1. Frobenius norm clamping: caps ‖M‖_F at max_norm to prevent the
++       Padé scaling-squaring algorithm from overflowing. For GL⁺(K),
++       exp(M) with ‖M‖ >> 1 produces extreme condition numbers that
++       make downstream Ω Σ Ω^T numerically non-positive-definite.
++    2. Float64 upcasting for K >= dim_threshold.
+ 
+     Note on surjectivity:
+         exp(M) always has det > 0 (since det(exp(M)) = exp(tr(M))), so the
+@@ -39,10 +43,18 @@ def stable_matrix_exp_pair(
+     Args:
+         matrix: (..., d, d) matrix to exponentiate.
+         dim_threshold: Upcast to float64 when d >= this value. Default 8.
++        max_norm: Maximum Frobenius norm for input matrix. Default 10.0.
+ 
+     Returns:
+         (exp_pos, exp_neg): Tuple of exp(M) and exp(-M), both same dtype as input.
+     """
++    # Clamp Frobenius norm to prevent overflow in matrix_exp.
++    # Gradient flows through the scaling factor, so φ still gets
++    # signal to shrink when it exceeds the cap.
++    mat_norm = matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
++    scale = (max_norm / mat_norm).clamp(max=1.0)
++    matrix = matrix * scale
++
+     d = matrix.shape[-1]
+     if d >= dim_threshold:
+         matrix_f64 = matrix.double()
+-- 
+2.43.0
+

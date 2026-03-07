@@ -1,0 +1,115 @@
+From 291e43a8dbf073489285fd232e24dd81943e7b62 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Mar 2026 20:04:10 +0000
+Subject: [PATCH] =?UTF-8?q?Fix=20KL=20temperature=20scaling:=20use=20?=
+ =?UTF-8?q?=E2=88=9AK=20instead=20of=202=E2=88=9AK?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The factor of 2 was justified by claiming the ½ prefactor in
+KL = ½(trace + mahal - K + logdet) means magnitudes are O(K/2).
+This conflates magnitude with variance. Softmax is translation-
+invariant, so only the spread of logit differences matters.
+The std of KL differences scales as √K regardless of the ½
+constant, which is properly absorbed into κ. The 2× factor
+over-normalized, making attention distributions softer than
+the principled √d_k analog warrants.
+
+Fixed in compute_attention_weights (attention.py) and all 5
+kappa_scaled sites in variational_ffn.py.
+
+https://claude.ai/code/session_01GHLan2Ee5sa2DXBYm175vF
+---
+ transformer/core/attention.py       | 12 ++++++------
+ transformer/core/variational_ffn.py | 21 +++++++++------------
+ 2 files changed, 15 insertions(+), 18 deletions(-)
+
+diff --git a/transformer/core/attention.py b/transformer/core/attention.py
+index 6bbd210..0441150 100644
+--- a/transformer/core/attention.py
++++ b/transformer/core/attention.py
+@@ -486,14 +486,14 @@ def compute_attention_weights(
+     # For K=100 (SO(100)), KL ≈ O(50) causing softmax saturation:
+     #   logits = -KL/κ ≈ -50 → one-hot attention → zero gradients.
+     #
+-    # The theoretically derived temperature is τ = 2√K:
++    # The theoretically derived temperature is τ = √K:
+     #   - √K handles the dimensional growth (sum of K per-dimension terms)
+-    #   - Factor of 2 accounts for the ½ prefactor in the KL divergence
+-    # This matches the BERT validation: τ_opt = 19.0 ≈ 2√64 = 16 for d=64
+-    # (19% deviation due to finite-dimensional corrections).
+-    dim_scale = 2.0 * math.sqrt(max(K, 1))
++    #   - The ½ prefactor in KL is a constant absorbed into κ, not the scaling
++    # Standard attention divides by √d_k to normalize logit-difference variance;
++    # analogously, KL logit differences have std ∝ √K, so we divide by √K.
++    dim_scale = math.sqrt(max(K, 1))
+ 
+-    # Attention logits: -KL / (κ · 2√K)
++    # Attention logits: -KL / (κ · √K)
+     logits = -kl_matrix / (kappa * dim_scale)  # (B, N, N)
+ 
+     # ==========================================================================
+diff --git a/transformer/core/variational_ffn.py b/transformer/core/variational_ffn.py
+index a423f84..bba8f6a 100644
+--- a/transformer/core/variational_ffn.py
++++ b/transformer/core/variational_ffn.py
+@@ -413,8 +413,8 @@ def _compute_vfe_gradients_block_diagonal(
+     grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+ 
+     # Softmax coupling term
+-    # Scale kappa by 2√K to match attention temperature τ = 2√K
+-    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
++    # Scale kappa by √K to match attention temperature τ = √K
++    kappa_scaled = kappa * math.sqrt(max(K, 1))
+     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
+     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
+@@ -556,7 +556,7 @@ def _compute_vfe_gradients_block_diagonal_diag(
+     grad_mu_direct = lambda_belief * torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+ 
+     # Softmax coupling term
+-    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
++    kappa_scaled = kappa * math.sqrt(max(K, 1))
+     avg_grad = torch.einsum('bij,bijk->bik', beta, grad_kl_per_pair_full)
+     grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair_full
+     d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
+@@ -628,8 +628,8 @@ def _compute_vfe_gradients_chunked(
+     grad_mu_softmax = torch.zeros_like(mu_q)
+     grad_sigma_align = torch.zeros_like(sigma_q)
+ 
+-    # Scale kappa by 2√K to match attention temperature τ = 2√K
+-    kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
++    # Scale kappa by √K to match attention temperature τ = √K
++    kappa_scaled = kappa * math.sqrt(max(K, 1))
+ 
+     # Two-pass approach for correct softmax coupling gradient:
+     # Pass 1: Accumulate avg_grad (= Σ_j β_ij ∂KL_ij/∂μ_i) and per-chunk KL/grad_kl
+@@ -959,10 +959,8 @@ def compute_vfe_gradients_gpu(
+         grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair  # (B, N, N, K)
+ 
+         # Softmax coupling gradient: ∂β_ij/∂μ_i = β_ij · grad_deviation / κ
+-        # Scale kappa by 2√K to match attention temperature scaling (τ = 2√K)
+-        # The factor of 2 accounts for the ½ prefactor in KL divergence:
+-        #   KL = ½(trace + mahal - K + logdet), so magnitudes are O(K/2), not O(K)
+-        kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
++        # Scale kappa by √K to match attention temperature scaling (τ = √K)
++        kappa_scaled = kappa * math.sqrt(max(K, 1))
+         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled  # (B, N, N, K)
+ 
+         # Weight by KL values and sum: Σ_j KL_ij · ∂β_ij/∂μ_i
+@@ -1072,9 +1070,8 @@ def compute_vfe_gradients_gpu(
+         grad_mu_direct = lambda_belief * avg_grad
+ 
+         # Softmax coupling term
+-        # Scale kappa by 2√K to match attention temperature scaling (τ = 2√K)
+-        # The factor of 2 accounts for the ½ prefactor in KL divergence
+-        kappa_scaled = kappa * 2.0 * math.sqrt(max(K, 1))
++        # Scale kappa by √K to match attention temperature scaling (τ = √K)
++        kappa_scaled = kappa * math.sqrt(max(K, 1))
+         grad_deviation = avg_grad.unsqueeze(2) - grad_kl_per_pair
+         d_beta_d_mu = beta.unsqueeze(-1) * grad_deviation / kappa_scaled
+         grad_mu_softmax = lambda_belief * torch.einsum('bij,bijk->bik', kl_values, d_beta_d_mu)
+-- 
+2.43.0
+

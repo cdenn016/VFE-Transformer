@@ -1,0 +1,51 @@
+From e3fe1dacef647a0d8c2b5231c3bd4ff13a15c32d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 7 Mar 2026 18:24:52 +0000
+Subject: [PATCH] Use actual vocab_size instead of hardcoded values in eval
+ baselines
+
+evaluate_test_set.py hardcoded 50,257 (GPT-2 vocab) and evaluation.py
+hardcoded 2,000 for the random baseline PPL comparison. Both now use
+the actual vocab_size from the loaded checkpoint.
+
+https://claude.ai/code/session_01Wjg1gvRNYdq7eoJQqZ3T9H
+---
+ transformer/utils/evaluate_test_set.py | 4 ++--
+ transformer/utils/evaluation.py        | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/transformer/utils/evaluate_test_set.py b/transformer/utils/evaluate_test_set.py
+index a23a7aa..5cba7ae 100644
+--- a/transformer/utils/evaluate_test_set.py
++++ b/transformer/utils/evaluate_test_set.py
+@@ -293,9 +293,9 @@ def evaluate_on_test(
+     print(f"Test Perplexity: {perplexity:.2f}")
+     print(f"Tokens evaluated: {total_tokens:,}")
+     print(f"\nComparison to baselines:")
+-    print(f"  Random (50,257 vocab): PPL 50,257")
++    print(f"  Random ({vocab_size:,} vocab): PPL {vocab_size:,}")
+     print(f"  Your model:            PPL {perplexity:.2f}")
+-    print(f"  Improvement:           {50257/perplexity:.1f}x better")
++    print(f"  Improvement:           {vocab_size/perplexity:.1f}x better")
+     print(f"{'='*70}\n")
+ 
+     return results
+diff --git a/transformer/utils/evaluation.py b/transformer/utils/evaluation.py
+index 0dbed88..cfe6a56 100644
+--- a/transformer/utils/evaluation.py
++++ b/transformer/utils/evaluation.py
+@@ -171,9 +171,9 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
+     print(f"Validation Loss: {avg_loss:.4f}")
+     print(f"Validation PPL:  {perplexity:.2f}")
+     print(f"\nComparison:")
+-    print(f"  Random baseline: ~2000 PPL")
++    print(f"  Random baseline: ~{vocab_size:,} PPL")
+     print(f"  Your model:      {perplexity:.2f} PPL")
+-    print(f"  Improvement:     {2000/perplexity:.1f}x better!")
++    print(f"  Improvement:     {vocab_size/perplexity:.1f}x better!")
+ 
+     # Performance assessment
+     print(f"\nAssessment:")
+-- 
+2.43.0
+

@@ -1,0 +1,260 @@
+From 2aa528247fbd8d1ec658d981adbd73f5e56d64a0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 5 Mar 2026 01:57:24 +0000
+Subject: [PATCH] Fix diagonal covariance being ~50x slower than full
+ covariance
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The diagonal path in compute_vfe_gradients_gpu and its chunked variant
+was converting diagonal covariances to full matrices via diag_embed,
+then doing full (B,N,N,K,K) transport, torch.linalg.inv, and Cholesky
+- completely defeating the purpose of diagonal mode.
+
+Replace with O(K) diagonal formulas:
+- Transport: σ_j_t[k] = Σ_l Ω_kl² * σ_j[l] via 3-operand einsum
+- KL grad: (μ_i - μ_j_t) / σ_j_t (element-wise, no matrix inverse)
+- KL value: diagonal trace/mahal/logdet (no Cholesky)
+- Sigma grad: 1/σ_j_t - 1/σ_i (element-wise, no matrix diagonal extraction)
+
+Also fix _compute_kl_matrix_diagonal: eliminate Omega**2 intermediate
+tensor and unnecessary .clone() calls on expanded views.
+
+https://claude.ai/code/session_017JmAhA6GzxuEk5QF4Y3cQG
+---
+ transformer/core/variational_ffn.py | 150 +++++++++-------------------
+ 1 file changed, 46 insertions(+), 104 deletions(-)
+
+diff --git a/transformer/core/variational_ffn.py b/transformer/core/variational_ffn.py
+index f323a16..fd744bd 100644
+--- a/transformer/core/variational_ffn.py
++++ b/transformer/core/variational_ffn.py
+@@ -454,9 +454,6 @@ def _compute_vfe_gradients_chunked(
+         exp_phi = exp_phi @ ((3.0 * eye_K - exp_phi.transpose(-1, -2) @ exp_phi) / 2.0)
+         exp_neg_phi = exp_neg_phi @ ((3.0 * eye_K - exp_neg_phi.transpose(-1, -2) @ exp_neg_phi) / 2.0)
+ 
+-    # Expand diagonal to full for transport
+-    sigma_j_diag = torch.diag_embed(sigma_q_safe)  # (B, N, K, K)
+-
+     # Accumulators - use non-inplace operations throughout
+     grad_mu_direct = torch.zeros_like(mu_q)
+     grad_mu_softmax = torch.zeros_like(mu_q)
+@@ -491,7 +488,7 @@ def _compute_vfe_gradients_chunked(
+ 
+             exp_neg_phi_j = exp_neg_phi[:, j_start:j_end].contiguous()
+             mu_j = mu_q[:, j_start:j_end].contiguous()
+-            sigma_j_diag_chunk = sigma_j_diag[:, j_start:j_end].contiguous()
++            sigma_j = sigma_q_safe[:, j_start:j_end].contiguous()
+             beta_chunk = beta_i[:, :, j_start:j_end].contiguous()
+ 
+             # Compute Omega for this chunk
+@@ -500,29 +497,19 @@ def _compute_vfe_gradients_chunked(
+             # Transport means
+             mu_j_transported = torch.einsum('bijkl,bjl->bijk', Omega, mu_j)
+ 
+-            # Transport covariances (diagonal -> full -> for grad computation)
+-            sigma_j_transported = torch.einsum(
+-                'bijkl,bjlm,bijmn->bijkn',
+-                Omega, sigma_j_diag_chunk, Omega.transpose(-1, -2)
+-            )
++            # Diagonal covariance transport: σ_j_transported[k] = Σ_l Ω_kl² * σ_j[l]
++            # Uses 3-operand einsum to avoid materializing Omega²
++            sigma_j_transported_diag = torch.einsum(
++                'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_j
++            ).clamp(min=eps)  # (B, n_i, n_j, K)
+ 
+             del Omega
+ 
+-            # Regularize and invert transported covariance
+-            # Use 1e-4 floor (not eps=1e-6) to prevent singularity after many
+-            # VFE iterations when σ_j entries shrink near zero
+-            sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+-            try:
+-                sigma_j_inv = torch.linalg.inv(sigma_j_reg)
+-            except (torch.linalg.LinAlgError, RuntimeError):
+-                _nr("inv_pinv")
+-                sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
+-
+             # Delta mu
+             delta_mu_ij = mu_i[:, :, None, :] - mu_j_transported
+ 
+-            # ∂KL/∂μ_i
+-            grad_kl = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)
++            # ∂KL/∂μ_i = (μ_i - μ_j_transported) / σ_j_transported (element-wise)
++            grad_kl = delta_mu_ij / sigma_j_transported_diag  # (B, n_i, n_j, K)
+ 
+             # Accumulate direct gradient
+             direct_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
+@@ -531,36 +518,28 @@ def _compute_vfe_gradients_chunked(
+             # Accumulate avg_grad = Σ_j β_ij ∂KL_ij/∂μ_i (complete over ALL j)
+             avg_grad_i = avg_grad_i + torch.einsum('bij,bijk->bik', beta_chunk, grad_kl)
+ 
+-            # Compute KL values for this chunk
+-            mahal = torch.einsum('bijk,bijk->bij', delta_mu_ij, grad_kl)
+-
+-            sigma_i_diag_exp = torch.diag_embed(sigma_i)[:, :, None, :, :].expand(-1, -1, n_j, -1, -1).clone()
+-            trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_diag_exp))
+-
+-            try:
+-                L_p = torch.linalg.cholesky(sigma_j_reg)
+-                logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1) + eps), dim=-1)
+-            except RuntimeError:
+-                logdet_p = torch.zeros(B, n_i, n_j, device=device, dtype=dtype)
+-
+-            logdet_q = torch.sum(torch.log(sigma_i), dim=-1)[:, :, None].expand(-1, -1, n_j).clone()
++            # Compute KL values using diagonal formulas (no Cholesky/inv needed)
++            sigma_i_exp = sigma_i[:, :, None, :].expand(-1, -1, n_j, -1)  # view
++            trace_term = (sigma_i_exp / sigma_j_transported_diag).sum(dim=-1)
++            mahal = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)
++            logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i_exp)).sum(dim=-1)
+ 
+             kl_ceil = max(100.0, 5.0 * K)
+-            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_p - logdet_q).clamp(min=0.0, max=kl_ceil)
++            kl_chunk = 0.5 * (trace_term + mahal - K + logdet_term).clamp(min=0.0, max=kl_ceil)
+ 
+             # Store for pass 2
+             chunk_data.append((beta_chunk, grad_kl, kl_chunk))
+ 
+             # Sigma alignment gradient
+             if compute_sigma_align_grad:
+-                sigma_j_inv_diag = torch.diagonal(sigma_j_inv, dim1=-2, dim2=-1)
++                sigma_j_inv_diag = 1.0 / sigma_j_transported_diag  # (B, n_i, n_j, K)
+                 sigma_i_inv = 1.0 / sigma_i.clamp(min=1e-6)
+-                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1).clone()
++                sigma_i_inv_exp = sigma_i_inv[:, :, None, :].expand(-1, -1, n_j, -1)  # view
+                 grad_sigma_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_exp)
+                 sigma_contrib = lambda_belief * torch.einsum('bij,bijk->bik', beta_chunk, grad_sigma_pair)
+                 grad_sigma_align[:, i_start:i_end] = grad_sigma_align[:, i_start:i_end] + sigma_contrib
+ 
+-            del sigma_j_transported, sigma_j_inv, mu_j_transported
++            del sigma_j_transported_diag, mu_j_transported
+ 
+         # ============================================================
+         # PASS 2: Softmax coupling with correct (complete) avg_grad
+@@ -756,70 +735,39 @@ def compute_vfe_gradients_gpu(
+         delta_mu_ij = mu_q.unsqueeze(2) - mu_j_transported  # (B, N, N, K)
+ 
+         # =================================================================
+-        # PROPER COVARIANCE TRANSPORT: Σ_j_transported = Ω @ diag(σ_j) @ Ω^T
++        # DIAGONAL COVARIANCE TRANSPORT: diag(Ω @ diag(σ_j) @ Ω^T)
+         # =================================================================
+-        # Even though input is diagonal, transported covariance is FULL!
+-        # This is crucial for gauge equivariance.
++        # For diagonal input, the diagonal of the transported covariance is:
++        #   σ_j_transported[k] = Σ_l Ω_kl² * σ_j[l]
++        # This avoids materializing any (B, N, N, K, K) covariance tensors.
+ 
+-        # Expand diagonal to full: diag(σ_j) -> (B, N, K, K)
+-        sigma_j_diag = torch.diag_embed(sigma_q.clamp(min=eps))  # (B, N, K, K)
++        sigma_q_safe = sigma_q.clamp(min=eps)  # (B, N, K)
+ 
+-        # Transport covariance: Σ_j_transported = Ω_ij @ Σ_j @ Ω_ij^T
+-        sigma_j_transported = torch.einsum(
+-            'bijkl,bjlm,bijmn->bijkn',
+-            Omega, sigma_j_diag, Omega.transpose(-1, -2)
+-        )  # (B, N, N, K, K)
++        # Transported diagonal covariance via 3-operand einsum (no Omega² intermediate)
++        sigma_j_transported_diag = torch.einsum(
++            'bijkl,bijkl,bjl->bijk', Omega, Omega, sigma_q_safe
++        ).clamp(min=eps)  # (B, N, N, K)
+ 
+-        # Regularize and invert transported covariance
+-        sigma_j_reg = sigma_j_transported + max(eps, 1e-4) * torch.eye(K, device=device, dtype=dtype)
+-        # NaN safety: if transport produced NaN (e.g., matrix_exp overflow),
+-        # replace with identity covariance to prevent cascading failures
+-        if torch.isnan(sigma_j_reg).any():
+-            nan_mask = torch.isnan(sigma_j_reg).any(dim=-1).any(dim=-1)  # (B, N, N)
+-            eye_K = torch.eye(K, device=device, dtype=dtype)
+-            sigma_j_reg = torch.where(
+-                nan_mask.unsqueeze(-1).unsqueeze(-1),
+-                eye_K.expand_as(sigma_j_reg),
+-                sigma_j_reg,
+-            )
+-        try:
+-            sigma_j_inv = torch.linalg.inv(sigma_j_reg)  # (B, N, N, K, K)
+-        except (torch.linalg.LinAlgError, RuntimeError):
+-            sigma_j_inv = torch.linalg.pinv(sigma_j_reg)
++        # ∂KL_ij/∂μ_i = (μ_i - μ_j_transported) / σ_j_transported (element-wise for diagonal)
++        grad_kl_per_pair = delta_mu_ij / sigma_j_transported_diag  # (B, N, N, K)
+ 
+-        # ∂KL_ij/∂μ_i = Σ_j_transported^{-1} @ (μ_i - μ_j_transported)
+-        grad_kl_per_pair = torch.einsum('bijkl,bijl->bijk', sigma_j_inv, delta_mu_ij)  # (B, N, N, K)
++        # Compute FULL KL values using diagonal formulas (no Cholesky/inv needed!)
++        # KL(N(μ_i,diag(σ_i)) || N(μ_j_t,diag(σ_j_t))) =
++        #   0.5 * (Σ_k σ_i[k]/σ_j_t[k] + Σ_k (μ_i-μ_j_t)²[k]/σ_j_t[k] - K + Σ_k log(σ_j_t[k]/σ_i[k]))
+ 
+-        # Compute FULL KL values (not just Mahalanobis - include trace and logdet!)
+-        # KL(q_i || Ω_ij[q_j]) = 0.5 * (tr(Σ_j_t^{-1} Σ_i) + mahal - K + log|Σ_j_t| - log|Σ_i|)
++        sigma_i_expanded = sigma_q_safe[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K) view
+ 
+-        # Mahalanobis term: δμ^T @ Σ_j_transported^{-1} @ δμ
+-        mahal_term = torch.einsum('bijk,bijk->bij', delta_mu_ij, grad_kl_per_pair)  # (B, N, N)
++        # Trace term: Σ_k σ_i[k] / σ_j_transported[k]
++        trace_term = (sigma_i_expanded / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
+ 
+-        # Trace term: tr(Σ_j_transported^{-1} @ Σ_i)
+-        # Σ_i is diagonal: diag(σ_q[i]) expanded to all pairs
+-        sigma_i_diag = torch.diag_embed(sigma_q.clamp(min=eps))  # (B, N, K, K)
+-        # Use .clone() after expand to avoid view-related gradient issues
+-        sigma_i_expanded = sigma_i_diag[:, :, None, :, :].expand(-1, -1, N, -1, -1).clone()  # (B, N, N, K, K)
+-        trace_term = torch.einsum('bijkk->bij', torch.einsum('bijkl,bijlm->bijkm', sigma_j_inv, sigma_i_expanded))
++        # Mahalanobis term: Σ_k (μ_i - μ_j_transported)² / σ_j_transported[k]
++        mahal_term = (delta_mu_ij ** 2 / sigma_j_transported_diag).sum(dim=-1)  # (B, N, N)
+ 
+-        # Log-determinant terms
+-        # For transported covariance (full matrix): use Cholesky with fallback
+-        try:
+-            L_j_t = torch.linalg.cholesky(sigma_j_reg)  # (B, N, N, K, K)
+-            logdet_j_t = 2.0 * torch.sum(torch.log(torch.diagonal(L_j_t, dim1=-2, dim2=-1) + eps), dim=-1)  # (B, N, N)
+-        except RuntimeError:
+-            # Cholesky failed - use eigenvalue decomposition as fallback
+-            # This is slower but more robust for ill-conditioned matrices
+-            eigvals = torch.linalg.eigvalsh(sigma_j_reg)  # (B, N, N, K)
+-            logdet_j_t = torch.sum(torch.log(eigvals.clamp(min=eps)), dim=-1)  # (B, N, N)
+-        # For source covariance (diagonal): log|diag(σ)| = sum(log(σ))
+-        logdet_i = torch.sum(torch.log(sigma_q.clamp(min=eps)), dim=-1)  # (B, N)
+-        # Use .clone() after expand to avoid view-related gradient issues
+-        logdet_i_expanded = logdet_i[:, :, None].expand(-1, -1, N).clone()  # (B, N, N)
++        # Log-determinant term: Σ_k log(σ_j_transported[k]) - Σ_k log(σ_i[k])
++        logdet_term = (torch.log(sigma_j_transported_diag) - torch.log(sigma_i_expanded)).sum(dim=-1)  # (B, N, N)
+ 
+         # Full KL divergence
+-        kl_values = 0.5 * (trace_term + mahal_term - K + logdet_j_t - logdet_i_expanded)
++        kl_values = 0.5 * (trace_term + mahal_term - K + logdet_term)
+         # Clamp KL to [0, max] for numerical stability (scale ceiling with K)
+         kl_ceil = max(100.0, 5.0 * K)
+         kl_values = kl_values.clamp(min=0.0, max=kl_ceil)  # (B, N, N)
+@@ -854,22 +802,16 @@ def compute_vfe_gradients_gpu(
+         grad_mu_align = grad_mu_direct + grad_mu_softmax
+ 
+         # =================================================================
+-        # Sigma gradient from alignment term
+-        # ∂KL/∂Σ_i = 0.5 * (Σ_j_transported^{-1} - Σ_i^{-1})
+-        # For diagonal mode, we take the diagonal of the transported inverse
+-        # Weighted by attention: Σ_j β_ij * ∂KL_ij/∂Σ_i
++        # Sigma gradient from alignment term (diagonal case)
++        # ∂KL/∂σ_i[k] = 0.5 * (1/σ_j_transported[k] - 1/σ_i[k])
++        # Weighted by attention: Σ_j β_ij * ∂KL_ij/∂σ_i
+         # =================================================================
+         if compute_sigma_align_grad:
+-            # Diagonal of inverse of transported covariance: diag(Σ_j_transported^{-1})
+-            # Use .clone() to avoid view-related gradient issues
+-            sigma_j_inv_diag = torch.diagonal(sigma_j_inv, dim1=-2, dim2=-1).clone()  # (B, N, N, K)
+-
+-            # Inverse of diagonal Σ_i: 1/σ_i expanded for all pairs
+-            sigma_i_inv = 1.0 / sigma_q.clamp(min=eps)  # (B, N, K)
+-            # Use .clone() after expand to avoid view-related gradient issues
+-            sigma_i_inv_expanded = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1).clone()  # (B, N, N, K)
++            sigma_j_inv_diag = 1.0 / sigma_j_transported_diag  # (B, N, N, K)
++            sigma_i_inv = 1.0 / sigma_q_safe  # (B, N, K)
++            sigma_i_inv_expanded = sigma_i_inv[:, :, None, :].expand(-1, -1, N, -1)  # (B, N, N, K) view
+ 
+-            # Gradient per pair: 0.5 * (Σ_j_transported^{-1}_kk - 1/σ_i[k])
++            # Gradient per pair: 0.5 * (1/σ_j_transported[k] - 1/σ_i[k])
+             grad_sigma_per_pair = 0.5 * (sigma_j_inv_diag - sigma_i_inv_expanded)  # (B, N, N, K)
+ 
+             # Weight by attention and sum: Σ_j β_ij * ∂KL_ij/∂σ_i
+-- 
+2.43.0
+

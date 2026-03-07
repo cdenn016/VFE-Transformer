@@ -1,0 +1,62 @@
+From ce88066875b459ad35eb927e8d7ab9248cfd9b20 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 4 Mar 2026 22:26:04 +0000
+Subject: [PATCH] Replace eigh fallback with progressive Cholesky
+ regularization
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+cusolver's batched syevd rejects large batch sizes (B*N*N can exceed
+internal limits), causing CUSOLVER_STATUS_INVALID_VALUE. The eigh
+fallback was itself crashing.
+
+New approach: on Cholesky failure, retry with progressively larger
+diagonal regularization (eps*10, eps*100, ..., eps*100000). This
+avoids eigendecomposition entirely. If all retries fail, fall back
+to identity covariance (KL ≈ 0 for those pairs).
+
+https://claude.ai/code/session_01GtmWd4jSA59aLejX5rtdK7
+---
+ transformer/core/attention.py | 25 +++++++++++++++++++------
+ 1 file changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/transformer/core/attention.py b/transformer/core/attention.py
+index 124ee31..6a18d3e 100644
+--- a/transformer/core/attention.py
++++ b/transformer/core/attention.py
+@@ -799,12 +799,25 @@ def _compute_kl_matrix_torch(
+         # Cholesky of transported covariances (prior in KL)
+         L_p = torch.linalg.cholesky(Sigma_transported_reg)
+     except RuntimeError:
+-        # Eigenvalue repair: clamp negative eigenvalues from numerical drift.
+-        # This is cheaper than falling through to the O(B*N*N) loop.
+-        eigs, V = torch.linalg.eigh(Sigma_transported_reg)
+-        eigs = eigs.clamp(min=eps)
+-        Sigma_transported_reg = V @ torch.diag_embed(eigs) @ V.transpose(-1, -2)
+-        L_p = torch.linalg.cholesky(Sigma_transported_reg)
++        # Cholesky failed (non-PD matrix from GL⁺(K) transport drift).
++        # Avoid eigh — cusolver's batched syevd can reject large batch sizes.
++        # Instead, add progressively larger diagonal regularization until
++        # Cholesky succeeds. Each doubling adds ~eps more, which is small
++        # relative to the matrix entries.
++        reg = eps
++        for _ in range(5):
++            reg *= 10.0
++            Sigma_transported_reg = Sigma_transported + reg * I
++            # Also re-symmetrize
++            Sigma_transported_reg = 0.5 * (Sigma_transported_reg + Sigma_transported_reg.transpose(-1, -2))
++            try:
++                L_p = torch.linalg.cholesky(Sigma_transported_reg)
++                break
++            except RuntimeError:
++                continue
++        else:
++            # Last resort: replace with identity (KL will be ~0 for these pairs)
++            L_p = torch.linalg.cholesky(I.expand_as(Sigma_transported_reg) + eps * I)
+ 
+     try:
+         # Trace term: tr(Σ_p⁻¹ Σ_q) where Σ_p = Σ_j^{→i}, Σ_q = Σ_i
+-- 
+2.43.0
+
