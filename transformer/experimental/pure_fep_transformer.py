@@ -357,6 +357,15 @@ class PureFEPConfig:
     # The prior (p) is what beliefs are measured against; the model (s) generates it.
     lambda_hyperprior: float = 0.1       # Weight for hyper-prior KL(s||h)
 
+    # Prior-model separation: p_i = w·π_token + (1-w)·s_i
+    # The PRIOR p is what beliefs are measured against in KL(q||p).
+    # The MODEL s is a separate level that generates the prior.
+    # token_prior_weight controls the blend:
+    #   w=1.0 → prior = pure token identity (model has no influence)
+    #   w=0.0 → prior = pure position model (current behavior, conflates p and s)
+    #   w=0.5 → prior = equal blend (recommended)
+    token_prior_weight: float = 0.5
+
     # Gradient-based prior updates: use VFE gradient to update priors
     # Instead of simple EMA, update priors via: p ← p - η_p · ∂F/∂p
     gradient_prior_updates: bool = False
@@ -781,28 +790,39 @@ class PureFEPLayer(nn.Module):
                 mu_q.requires_grad_(True)
 
         # =====================================================================
-        # POSITION-DEPENDENT PRIORS - broadcast across batch only
+        # PRIOR-MODEL SEPARATION: p = f(s, π_token)
         # =====================================================================
-        # Handle sequence length mismatch (input may be shorter than max seq_length)
-        N_prior = min(N, self.prior_mu.shape[0])
+        # In the FEP hierarchy:
+        #   s_i = position model (self.prior_mu) — learned, slow timescale
+        #   π_token = token prior (x, from PriorBank) — token identity
+        #   p_i = w·π_token + (1-w)·s_i — the PRIOR beliefs are measured against
+        #
+        # KL(q||p) pulls beliefs toward the prior (which blends token + position).
+        # KL(s||Ω·s) and KL(s||h) act on the MODELS, not the priors.
+        # This properly separates the three levels: q (fast) ← p (derived) ← s (slow).
+        N_model = min(N, self.prior_mu.shape[0])
 
-        # Get position-specific priors and expand across batch
-        mu_p = self.prior_mu[:N_prior, :].unsqueeze(0).expand(B, -1, -1).clone()
-        sigma_p = self.prior_sigma[:N_prior, :].unsqueeze(0).expand(B, -1, -1).clone()
+        # Position models s_i (expand across batch)
+        model_mu = self.prior_mu[:N_model, :].unsqueeze(0).expand(B, -1, -1).clone()
+        model_sigma = self.prior_sigma[:N_model, :].unsqueeze(0).expand(B, -1, -1).clone()
 
-        # Pad if input sequence is longer than stored priors
-        if N > N_prior:
-            # PRINCIPLED: Use mean of existing position priors for new positions
-            # This maintains consistency rather than introducing artificial zeros
-            mu_p_mean = self.prior_mu[:N_prior, :].mean(dim=0, keepdim=True)  # (1, K)
-            sigma_p_mean = self.prior_sigma[:N_prior, :].mean(dim=0, keepdim=True)  # (1, K)
-            mu_p_pad = mu_p_mean.expand(B, N - N_prior, K).clone()
-            sigma_p_pad = sigma_p_mean.expand(B, N - N_prior, K).clone()
-            mu_p = torch.cat([mu_p, mu_p_pad], dim=1)
-            sigma_p = torch.cat([sigma_p, sigma_p_pad], dim=1)
+        # Pad if input sequence is longer than stored models
+        if N > N_model:
+            model_mu_mean = self.prior_mu[:N_model, :].mean(dim=0, keepdim=True)
+            model_sigma_mean = self.prior_sigma[:N_model, :].mean(dim=0, keepdim=True)
+            model_mu = torch.cat([model_mu, model_mu_mean.expand(B, N - N_model, K).clone()], dim=1)
+            model_sigma = torch.cat([model_sigma, model_sigma_mean.expand(B, N - N_model, K).clone()], dim=1)
 
-        # PRINCIPLED: Initialize belief variance from prior variance
-        # Beliefs should inherit uncertainty from priors, not use magic numbers
+        # Token priors π_token = x (the embedding of input tokens)
+        token_mu = x.detach().clone()  # (B, N, K) — always detach, this is the fixed token identity
+
+        # PRIOR = blend of token prior and position model
+        # p = w·π_token + (1-w)·s
+        w = self.config.token_prior_weight
+        mu_p = w * token_mu + (1 - w) * model_mu
+        sigma_p = model_sigma  # Variance from position model (token variance not tracked separately)
+
+        # Initialize belief variance from prior variance
         sigma_q = sigma_p.clone()
 
         # =====================================================================
@@ -896,10 +916,15 @@ class PureFEPLayer(nn.Module):
             )
 
         # ==================================================================
-        # 2. Compute FULL VFE loss INCLUDING observations
+        # 2. Compute FULL VFE with proper hierarchy
         # ==================================================================
-        # F = α·KL(q||p) + λ·alignment + λ_obs·CE
-        # This is the TRUE variational free energy!
+        # F = α·KL(q||p) + λ·alignment + λ_obs·CE + γ·KL(s||Ω·s) + λ_h·KL(s||h)
+        #
+        # where p = w·π_token + (1-w)·s  (prior derived from model + token identity)
+        #       s = position model (self.prior_mu, slow timescale)
+        #       h = centroid of position models (hyper-prior)
+        #
+        # Three levels: q (beliefs, fast) ← p (prior, derived) ← s (model, slow) ← h
 
         # Self-coupling: α·KL(q||p)
         # Use variance_floor (larger than eps) to prevent numerical issues in KL division
@@ -916,8 +941,18 @@ class PureFEPLayer(nn.Module):
         # Alignment: λ·Σ β_ij·KL_ij (use precomputed)
         alignment = (beta * kl_matrix).sum(dim=-1).mean()
 
-        # Prior coupling: λ_γ · Σ_ij KL(p_i || Ω_ij · p_j)
-        prior_coupling = self.compute_prior_coupling_loss(mu_p, sigma_p, phi, mask)
+        # MODEL coupling: γ_ij · KL(s_i || Ω_ij · s_j)
+        # Acts on MODELS (self.prior_mu), NOT the blended priors (mu_p).
+        # The prior p = blend(s, π_token) is for KL(q||p) only.
+        N_model = min(N, self.prior_mu.shape[0])
+        model_mu_for_coupling = self.prior_mu[:N_model].unsqueeze(0).expand(B, -1, -1)
+        model_sigma_for_coupling = self.prior_sigma[:N_model].unsqueeze(0).expand(B, -1, -1)
+        if N > N_model:
+            pad_mu = self.prior_mu[:N_model].mean(dim=0, keepdim=True).unsqueeze(0).expand(B, N - N_model, -1)
+            pad_sigma = self.prior_sigma[:N_model].mean(dim=0, keepdim=True).unsqueeze(0).expand(B, N - N_model, -1)
+            model_mu_for_coupling = torch.cat([model_mu_for_coupling, pad_mu], dim=1)
+            model_sigma_for_coupling = torch.cat([model_sigma_for_coupling, pad_sigma], dim=1)
+        prior_coupling = self.compute_prior_coupling_loss(model_mu_for_coupling, model_sigma_for_coupling, phi, mask)
 
         # ==================================================================
         # OBSERVATION TERM: E_q[-log p(y|x)]
@@ -948,25 +983,22 @@ class PureFEPLayer(nn.Module):
             ce_loss = torch.tensor(0.0, device=device)
 
         # ==================================================================
-        # HYPER-PRIOR: KL(s_i || h) — regularizes position models
+        # HYPER-PRIOR: KL(s_i || h) — regularizes position MODELS
         # ==================================================================
-        # In the FEP framework, position-dependent parameters (prior_mu/sigma)
-        # are the generative MODELS s_i. The model coupling γ_ij·KL(s_i||Ω_ij·s_j)
-        # ensures gauge coherence. The hyper-prior KL(s_i||h) prevents memorization
-        # by pulling all position models toward a shared centroid h.
-        #
-        # h_mu = mean of s_i across positions (the "typical" model)
-        # Detached so each s_i is pulled independently toward the centroid.
-        h_mu = mu_p.mean(dim=1, keepdim=True).detach()  # (B, 1, K)
-        h_sigma = sigma_p.mean(dim=1, keepdim=True).detach().clamp(min=variance_floor)
+        # Acts on MODELS (self.prior_mu), NOT the blended priors (mu_p).
+        # h = centroid of position models (the "typical" model).
+        # Prevents position models from memorizing per-position statistics.
+        model_sigma_safe = model_sigma_for_coupling.clamp(min=variance_floor)
+        h_mu = model_mu_for_coupling.mean(dim=1, keepdim=True).detach()  # (B, 1, K)
+        h_sigma = model_sigma_safe.mean(dim=1, keepdim=True).detach().clamp(min=variance_floor)
         # Broaden hyper-prior variance (2x) to allow model diversity
         h_sigma_broad = h_sigma * 2.0
 
         hyperprior_kl = 0.5 * (
-            sigma_p_safe / h_sigma_broad
-            + (mu_p - h_mu)**2 / h_sigma_broad
+            model_sigma_safe / h_sigma_broad
+            + (model_mu_for_coupling - h_mu)**2 / h_sigma_broad
             - 1.0
-            + torch.log(h_sigma_broad / sigma_p_safe)
+            + torch.log(h_sigma_broad / model_sigma_safe)
         ).sum(dim=-1).mean()
 
         # ==================================================================
