@@ -45,7 +45,6 @@ class TrainingConfig:
     sigma_lr: float = 0.005      # Covariance embeddings (smaller for stability)
     phi_lr: float = 0.01         # Gauge frames
     attention_lr: float = 0.01   # Attention parameters
-    ffn_lr: float = 0.001        # FFN parameters (standard)
     output_lr: float = 0.001     # Output projection
 
     # ==========================================================================
@@ -176,7 +175,6 @@ def get_vfe_dynamic_config(**overrides) -> TrainingConfig:
         sigma_lr=0.005,
         phi_lr=0.01,
         attention_lr=0.01,
-        ffn_lr=0.001,
         output_lr=0.001,
         alpha=0.1,
         lambda_beta=1.0,

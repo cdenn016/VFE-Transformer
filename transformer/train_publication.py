@@ -228,7 +228,6 @@ STANDARD_CONFIG = {
     'mu_lr': 3e-4,              #1e-3 - 1e-4 or it wont work well
     'sigma_lr': 0.0001,
     'phi_lr': 0.0001,
-    'ffn_lr': 3e-4,
 
     # Free energy weights (NOT USED in standard mode)
     'alpha': 0,
@@ -326,7 +325,6 @@ VFE_EM_CONFIG = {
     'mu_lr':     0.05,
     'sigma_lr':  0.005,
     'phi_lr':    0.005,
-    'ffn_lr':    0.05 ,
 
     # Free energy weights
     'alpha':        1,                   # Self-consistency in training loss
@@ -498,7 +496,6 @@ PURE_FEP_CONFIG = {
     'mu_lr': 0.05,                # Belief mean update (slower)
     'sigma_lr': 0.01,             # Belief variance (much slower)
     'phi_lr': 0.01,               # Gauge frame (slow)
-    'ffn_lr': 0.01,               # Not used in pure FEP
 
     # Free energy weights (used inside VFE dynamics)
     'alpha': 0.1,                 # Self-consistency (lower for stability)
@@ -821,10 +818,10 @@ class PublicationMetricsTracker:
             'rg_dynamic_rank_init', 'rg_dynamic_rank_final', 'rg_dynamic_rank_change',
 
             # Learning rates
-            'mu_lr', 'sigma_lr', 'phi_lr', 'ffn_lr',
+            'mu_lr', 'sigma_lr', 'phi_lr',
 
             # Gradient norms
-            'grad_norm_total', 'grad_norm_mu', 'grad_norm_ffn',
+            'grad_norm_total', 'grad_norm_mu',
 
             # Bayesian alpha diagnostics
             'alpha_mean', 'alpha_std', 'alpha_min', 'alpha_max',
@@ -898,12 +895,10 @@ class PublicationMetricsTracker:
             'mu_lr': lrs.get('mu_embed', 0),
             'sigma_lr': lrs.get('sigma_embed', 0),
             'phi_lr': lrs.get('phi_embed', 0),
-            'ffn_lr': lrs.get('ffn', 0),
 
             # Gradients
             'grad_norm_total': grad_norms.get('total', 0) if grad_norms else 0,
             'grad_norm_mu': grad_norms.get('mu', 0) if grad_norms else 0,
-            'grad_norm_ffn': grad_norms.get('ffn', 0) if grad_norms else 0,
 
             # Bayesian alpha diagnostics
             'alpha_mean': metrics.get('bayesian/alpha_mean'),
@@ -1449,13 +1444,12 @@ class PublicationTrainer:
 
     def _compute_gradient_norms(self) -> Dict[str, float]:
         """Compute gradient norms for different parameter groups."""
-        norms = {'total': 0, 'mu': 0, 'sigma': 0, 'phi': 0, 'ffn': 0}
+        norms = {'total': 0, 'mu': 0, 'sigma': 0, 'phi': 0}
 
         total_norm = 0
         mu_norm = 0
         sigma_norm = 0
         phi_norm = 0
-        ffn_norm = 0
 
         for name, param in self.model.named_parameters():
             if param.grad is not None:
@@ -1468,14 +1462,11 @@ class PublicationTrainer:
                     sigma_norm += param_norm ** 2
                 elif 'phi_embed' in name or 'phi' in name.lower():
                     phi_norm += param_norm ** 2
-                elif 'ffn' in name:
-                    ffn_norm += param_norm ** 2
 
         norms['total'] = math.sqrt(total_norm)
         norms['mu'] = math.sqrt(mu_norm)
         norms['sigma'] = math.sqrt(sigma_norm)
         norms['phi'] = math.sqrt(phi_norm)
-        norms['ffn'] = math.sqrt(ffn_norm)
 
         return norms
 
@@ -2027,14 +2018,13 @@ def run_single_experiment(
         warmup_steps=config['warmup_steps'],
 
         # Learning rates
-        # For standard transformer: attention_lr should match ffn_lr (all standard Adam)
+        # For standard transformer: attention_lr should match learning_rate (all standard Adam)
         # For gauge transformer: attention_lr matches phi_lr (natural gradient scale)
         mu_lr=config['mu_lr'],
         sigma_lr=config['sigma_lr'],
         phi_lr=config['phi_lr'],
-        attention_lr=config.get('attention_lr', config['ffn_lr'] if ffn_mode == 'standard' else config['phi_lr']),
-        ffn_lr=config['ffn_lr'],
-        output_lr=config['ffn_lr'],
+        attention_lr=config.get('attention_lr', config['mu_lr'] if ffn_mode == 'standard' else config['phi_lr']),
+        output_lr=config.get('output_lr', 0.001),
 
         weight_decay=config['weight_decay'],
         grad_clip=config['grad_clip'],

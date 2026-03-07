@@ -91,7 +91,7 @@ class TestCreateParamGroups:
             sigma_lr=0.01,
             phi_lr=0.05,
             attention_lr=0.001,
-            ffn_lr=0.001,
+
             output_lr=0.001,
         )
 
@@ -118,7 +118,7 @@ class TestCreateParamGroups:
             sigma_lr=0.01,
             phi_lr=0.05,
             attention_lr=0.001,
-            ffn_lr=0.001,
+
             output_lr=0.001,
         )
 
@@ -154,7 +154,7 @@ class TestCreateOptimizer:
             sigma_lr=0.01,
             phi_lr=0.05,
             attention_lr=0.001,
-            ffn_lr=0.001,
+
             output_lr=0.001,
         )
 
@@ -177,7 +177,7 @@ class TestCreateOptimizer:
             sigma_lr=0.01,
             phi_lr=0.05,
             attention_lr=0.001,
-            ffn_lr=0.001,
+
             output_lr=0.001,
         )
 
