@@ -26,7 +26,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional
-import numpy as np
 
 from transformer.core.sanitization import san
 
@@ -101,7 +100,7 @@ class PriorBank(nn.Module):
 
         # Dimension-aware initialization: 1/sqrt(K) keeps ||μ||² = O(1)
         if init_std is None:
-            init_std = 1.0 / np.sqrt(embed_dim)
+            init_std = 1.0 / math.sqrt(embed_dim)
 
         if gauge_fixed_priors:
             # Validate generators

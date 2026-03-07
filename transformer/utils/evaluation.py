@@ -84,6 +84,7 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
         'tie_embeddings': get_config_val(config, 'tie_embeddings', True),
         'dropout': get_config_val(config, 'dropout', 0.1),
         'irrep_spec': get_config_val(config, 'irrep_spec', [('ℓ0', 5, 1), ('ℓ1', 2, 3)]),
+        'diagonal_covariance': get_config_val(config, 'diagonal_covariance', True),
     }
 
     model = GaugeTransformerLM(config_dict)
@@ -165,9 +166,9 @@ def evaluate_checkpoint(checkpoint_path: str, max_batches: int = 50):
     print(f"Validation Loss: {avg_loss:.4f}")
     print(f"Validation PPL:  {perplexity:.2f}")
     print(f"\nComparison:")
-    print(f"  Random baseline: ~2000 PPL")
+    print(f"  Random baseline: ~{vocab_size:,} PPL")
     print(f"  Your model:      {perplexity:.2f} PPL")
-    print(f"  Improvement:     {2000/perplexity:.1f}x better!")
+    print(f"  Improvement:     {vocab_size/perplexity:.1f}x better!")
 
     # Performance assessment
     print(f"\nAssessment:")

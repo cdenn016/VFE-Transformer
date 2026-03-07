@@ -178,18 +178,18 @@ class GaugeTokenEmbedding(nn.Module):
         if gauge_fixed_priors:
             # Single base prior covariance Σ_0 - all token priors are rotations of this
             self.base_log_sigma_diag = nn.Parameter(
-                torch.full((embed_dim,), np.log(init_sigma_scale))
+                torch.full((embed_dim,), math.log(init_sigma_scale))
             )
         elif learnable_sigma:
             # Per-token covariance
             self.log_sigma_diag = nn.Parameter(
-                torch.full((vocab_size, embed_dim), np.log(init_sigma_scale))
+                torch.full((vocab_size, embed_dim), math.log(init_sigma_scale))
             )
         else:
             # Shared isotropic covariance across all tokens
             self.register_buffer(
                 'log_sigma_diag',
-                torch.full((embed_dim,), np.log(init_sigma_scale))
+                torch.full((embed_dim,), math.log(init_sigma_scale))
             )
 
         # =================================================================
@@ -397,9 +397,9 @@ class GaugeTokenEmbedding(nn.Module):
                 weighted_belief = (token_beliefs * token_weights.unsqueeze(-1)).sum(dim=0) / total_weight
 
                 # EMA update: prior ← (1 - lr) · prior + lr · belief
-                current_embedding = self.mu_embed.weight[token_id]  # (K,)
+                current_embedding = self.mu_embed.weight.data[token_id]  # (K,)
                 new_embedding = (1.0 - lr) * current_embedding + lr * weighted_belief
-                self.mu_embed.weight[token_id] = new_embedding
+                self.mu_embed.weight.data[token_id] = new_embedding
 
     def get_embedding_stats(self) -> dict:
         """Get statistics about embeddings for logging."""
@@ -415,6 +415,14 @@ class GaugeTokenEmbedding(nn.Module):
                 'embed_mu_std': mu_weight.std().item(),
                 'embed_mu_norm_mean': mu_weight.norm(dim=-1).mean().item(),
             }
+
+
+
+
+
+
+
+
 
 
 

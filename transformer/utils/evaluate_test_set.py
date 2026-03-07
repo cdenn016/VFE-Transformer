@@ -291,9 +291,9 @@ def evaluate_on_test(
     print(f"Test Perplexity: {perplexity:.2f}")
     print(f"Tokens evaluated: {total_tokens:,}")
     print(f"\nComparison to baselines:")
-    print(f"  Random (50,257 vocab): PPL 50,257")
+    print(f"  Random ({vocab_size:,} vocab): PPL {vocab_size:,}")
     print(f"  Your model:            PPL {perplexity:.2f}")
-    print(f"  Improvement:           {50257/perplexity:.1f}x better")
+    print(f"  Improvement:           {vocab_size/perplexity:.1f}x better")
     print(f"{'='*70}\n")
 
     return results

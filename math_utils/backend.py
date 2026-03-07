@@ -55,6 +55,7 @@ import os
 import warnings
 from typing import Optional, Union, Literal, Any
 from functools import lru_cache
+from math_utils.numerical_monitor import record as _nr
 import numpy as np
 
 
@@ -406,7 +407,11 @@ class _PyTorchLinalgAdapter:
         return self.torch.linalg.cholesky(a)
 
     def inv(self, a):
-        return self.torch.linalg.inv(a)
+        try:
+            return self.torch.linalg.inv(a)
+        except (RuntimeError,):
+            _nr("inv_pinv")
+            return self.torch.linalg.pinv(a)
 
     def solve(self, a, b):
         return self.torch.linalg.solve(a, b)

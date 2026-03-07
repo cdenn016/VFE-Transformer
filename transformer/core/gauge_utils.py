@@ -15,12 +15,16 @@ from typing import Tuple
 def stable_matrix_exp_pair(
     matrix: torch.Tensor,
     dim_threshold: int = 8,
+    max_norm: float = 10.0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Compute exp(M) and exp(-M) with float64 upcasting for numerical stability.
+    """Compute exp(M) and exp(-M) with norm clamping and float64 upcasting.
 
-    For GL(K) gauge groups with K >= dim_threshold, upcasts to float64 before
-    computing the matrix exponential to prevent NaN from Padé scaling-squaring
-    overflow when phi values grow large.
+    Two stability measures:
+    1. Frobenius norm clamping: caps ||M||_F at max_norm to prevent the
+       Pade scaling-squaring algorithm from overflowing. For GL+(K),
+       exp(M) with ||M|| >> 1 produces extreme condition numbers that
+       make downstream Omega Sigma Omega^T numerically non-positive-definite.
+    2. Float64 upcasting for K >= dim_threshold.
 
     Note on surjectivity:
         exp(M) always has det > 0 (since det(exp(M)) = exp(tr(M))), so the
@@ -39,10 +43,18 @@ def stable_matrix_exp_pair(
     Args:
         matrix: (..., d, d) matrix to exponentiate.
         dim_threshold: Upcast to float64 when d >= this value. Default 8.
+        max_norm: Maximum Frobenius norm for input matrix. Default 10.0.
 
     Returns:
         (exp_pos, exp_neg): Tuple of exp(M) and exp(-M), both same dtype as input.
     """
+    # Clamp Frobenius norm to prevent overflow in matrix_exp.
+    # Gradient flows through the scaling factor, so phi still gets
+    # signal to shrink when it exceeds the cap.
+    mat_norm = matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
+    scale = (max_norm / mat_norm).clamp(max=1.0)
+    matrix = matrix * scale
+
     d = matrix.shape[-1]
     if d >= dim_threshold:
         matrix_f64 = matrix.double()
