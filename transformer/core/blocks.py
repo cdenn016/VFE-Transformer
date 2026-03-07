@@ -18,10 +18,8 @@ Author: Implementation from plan.py
 Date: November 2025
 """
 
-import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from typing import Optional, Tuple, List
 
 # Import our gauge attention
@@ -124,6 +122,9 @@ class GaugeTransformerBlock(nn.Module):
         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
         # Cross-head coupling
         cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
+        # RoPE (Rotary Position Embeddings)
+        use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
+        rope_base: float = 10000.0,  # RoPE frequency base
     ):
         """
         Initialize gauge transformer block.
@@ -224,6 +225,8 @@ class GaugeTransformerBlock(nn.Module):
             per_head_kappa=per_head_kappa,
             use_output_projection=use_output_projection,
             irrep_dims_override=ffn_irrep_dims if (gauge_group == 'GLK' and cross_head_perm is not None) else None,
+            use_rope=use_rope,
+            rope_base=rope_base,
         )
 
         # Conditionally create LayerNorm and Dropout (disabled for pure VFE)
@@ -288,7 +291,7 @@ class GaugeTransformerBlock(nn.Module):
         phi: torch.Tensor,
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        mu_prior: Optional[torch.Tensor] = None,  # For variational FFN
+        mu_prior: Optional[torch.Tensor] = None,  # Required for VFE_dynamic mode
         token_ids: Optional[torch.Tensor] = None,  # For PriorBank lookup
         targets: Optional[torch.Tensor] = None,   # For E-step observations
         W_out: Optional[torch.Tensor] = None,     # Output projection for discrete observations
@@ -475,6 +478,9 @@ class GaugeTransformerStack(nn.Module):
         multihead_vfe: bool = False,  # If True, VFE_dynamic maintains per-head attention
         # Cross-head coupling
         cross_head_perm: Optional[object] = None,  # np.ndarray permutation for super-blocks
+        # RoPE (Rotary Position Embeddings)
+        use_rope: bool = False,  # If True, apply RoPE rotations to μ in attention
+        rope_base: float = 10000.0,  # RoPE frequency base
     ):
         """
         Initialize stack of transformer blocks.
@@ -572,6 +578,9 @@ class GaugeTransformerStack(nn.Module):
                 multihead_vfe=multihead_vfe,
                 # Cross-head coupling
                 cross_head_perm=cross_head_perm,
+                # RoPE
+                use_rope=use_rope,
+                rope_base=rope_base,
             )
             for _ in range(n_layers)
         ])
@@ -586,7 +595,7 @@ class GaugeTransformerStack(nn.Module):
         phi: torch.Tensor,
         generators: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        mu_prior: Optional[torch.Tensor] = None,  # For variational FFN
+        mu_prior: Optional[torch.Tensor] = None,  # Required for VFE_dynamic mode
         token_ids: Optional[torch.Tensor] = None,  # For PriorBank lookup
         return_intermediates: bool = False,
         cached_head_transports: Optional[list] = None,  # Cross-layer transport cache

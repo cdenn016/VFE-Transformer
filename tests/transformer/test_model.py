@@ -396,10 +396,8 @@ class TestGaugeTransformerLMConfigurations:
             'max_seq_len': 32,
             'kappa_beta': 1.0,
             'diagonal_covariance': True,
-            'use_diagonal_covariance': True,
             'irrep_spec': [('l0', 6, 1), ('l1', 3, 3)],
-                'use_diagonal_covariance': True,
-                'ffn_mode': 'VFE_dynamic',
+            'ffn_mode': 'VFE_dynamic',
         }
         model = GaugeTransformerLM(config)
         input_ids = torch.randint(0, 100, (2, 16))

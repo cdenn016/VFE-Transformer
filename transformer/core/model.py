@@ -100,6 +100,11 @@ class GaugeTransformerLM(nn.Module):
         super().__init__()
         self.config = config
 
+        # Initialize cross-head coupling attributes (may be set later in gauge setup)
+        self._cross_head_perm = None
+        self._super_block_dims = None
+        self._super_block_head_groups = None
+
         # Extract config
         vocab_size = config['vocab_size']
         embed_dim = config['embed_dim']
@@ -409,12 +414,22 @@ class GaugeTransformerLM(nn.Module):
             multihead_vfe=config.get('multihead_vfe', False),
             # Cross-head coupling
             cross_head_perm=getattr(self, '_cross_head_perm', None),
+            # RoPE (Rotary Position Embeddings)
+            use_rope=config.get('use_rope', False),
+            rope_base=config.get('rope_base', 10000.0),
         )
 
         # =================================================================
         # Output Projection
         # =================================================================
         self.out_proj = nn.Linear(embed_dim, vocab_size, bias=False)
+
+        # =================================================================
+        # Initialize Weights (BEFORE tying embeddings, so that the
+        # embedding's calibrated init_std is not overwritten by out_proj's
+        # std=0.02 initialization)
+        # =================================================================
+        self.apply(self._init_weights)
 
         # Tie input/output embeddings (standard practice)
         # Note: Can't tie weights when gauge_fixed_priors=True since there's
@@ -423,11 +438,6 @@ class GaugeTransformerLM(nn.Module):
             self.out_proj.weight = self.token_embed.mu_embed.weight
         elif tie_embeddings and gauge_fixed_priors:
             print("Warning: tie_embeddings disabled because gauge_fixed_priors=True")
-
-        # =================================================================
-        # Initialize Weights
-        # =================================================================
-        self.apply(self._init_weights)
 
         # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
@@ -758,7 +768,7 @@ class GaugeTransformerLM(nn.Module):
             'kl': kl,          # (B, n_heads, N, N)
             'mu': mu_q,        # (B, N, K) - evolved beliefs
             'sigma': sigma_q,  # (B, N, K, K) or None
-            'phi': phi,        # (B, N, 3)
+            'phi': phi_ffn if phi_ffn is not None else phi,  # (B, N, gauge_dim) - post-FFN phi
             # Priors for gamma term (saved before position encoding)
             'mu_prior': mu_prior,        # (B, N, K) - initial embedding means
             'sigma_prior': sigma_prior,  # (B, N, K, K) - initial embedding covariances
@@ -908,7 +918,7 @@ class GaugeTransformerLM(nn.Module):
             'beta_history': beta_history,  # List of (B, N, N) at each VFE step
             'mu': mu_q,
             'sigma': sigma_q,
-            'phi': phi,
+            'phi': phi_ffn if phi_ffn is not None else phi,
             'n_iterations': n_iterations,
             'beta_final': beta_history[-1] if beta_history else beta,
         }

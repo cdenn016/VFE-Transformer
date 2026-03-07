@@ -88,6 +88,67 @@ __all__ = [
 
 
 # =============================================================================
+# Rotary Position Embeddings (RoPE) for KL-Divergence Attention
+# =============================================================================
+# RoPE applies position-dependent SO(2)^{K/2} rotations to belief means μ
+# before computing KL divergences. This makes attention position-sensitive
+# without affecting gauge transport Ω_ij.
+#
+# In the gauge-theoretic framework (see GL(K)_attention.tex §3):
+#   Ω_ij^{RoPE} = R(θ_{j-i}) · Ω_ij^{content}
+# where R(θ) ∈ SO(2)^{K/2} ⊂ GL(K) is the position-dependent rotation.
+# =============================================================================
+
+def _build_rope_freqs(K: int, base: float = 10000.0,
+                      device: torch.device = None,
+                      dtype: torch.dtype = None) -> torch.Tensor:
+    """Compute RoPE frequency bands for K-dimensional beliefs.
+
+    Returns:
+        freqs: (K//2,) inverse frequency bands
+    """
+    half_K = K // 2
+    freqs = 1.0 / (base ** (torch.arange(0, half_K, device=device, dtype=dtype) / half_K))
+    return freqs
+
+
+def _apply_rope(mu: torch.Tensor, base: float = 10000.0) -> torch.Tensor:
+    """Apply Rotary Position Embeddings to belief means.
+
+    Rotates consecutive pairs of dimensions by position-dependent angles,
+    making KL divergences sensitive to relative position.
+
+    Args:
+        mu: (B, N, K) belief means
+        base: RoPE frequency base (default 10000.0)
+
+    Returns:
+        mu_rotated: (B, N, K) position-rotated belief means
+    """
+    B, N, K = mu.shape
+    half_K = K // 2
+
+    # Compute position-dependent angles: θ_n(pos) = pos * freq_n
+    freqs = _build_rope_freqs(K, base, device=mu.device, dtype=mu.dtype)  # (K//2,)
+    positions = torch.arange(N, device=mu.device, dtype=mu.dtype)  # (N,)
+    angles = torch.outer(positions, freqs)  # (N, K//2)
+
+    cos_angles = torch.cos(angles)  # (N, K//2)
+    sin_angles = torch.sin(angles)  # (N, K//2)
+
+    # Split μ into even/odd pairs and apply 2D rotation
+    mu_even = mu[:, :, :2*half_K:2]   # (B, N, K//2) - dims 0,2,4,...
+    mu_odd = mu[:, :, 1:2*half_K:2]   # (B, N, K//2) - dims 1,3,5,...
+
+    # R(θ) @ [x, y]^T = [x·cos(θ) - y·sin(θ), x·sin(θ) + y·cos(θ)]
+    mu_rotated = mu.clone()
+    mu_rotated[:, :, :2*half_K:2] = mu_even * cos_angles - mu_odd * sin_angles
+    mu_rotated[:, :, 1:2*half_K:2] = mu_even * sin_angles + mu_odd * cos_angles
+
+    return mu_rotated
+
+
+# =============================================================================
 # Sparse Attention Patterns
 # =============================================================================
 
@@ -254,6 +315,9 @@ def compute_attention_weights(
     mask_self_attention: bool = False,  # If True, mask out diagonal (no self-attention)
     # Gauge group control
     enforce_orthogonal: bool = False,  # If True, enforce Ω ∈ SO(K) via Newton-Schulz
+    # Rotary Position Embeddings (RoPE)
+    use_rope: bool = False,            # If True, apply RoPE rotations to μ before KL computation
+    rope_base: float = 10000.0,        # RoPE frequency base
 ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
     """
     Compute attention weights from KL divergences (0D version).
@@ -324,6 +388,14 @@ def compute_attention_weights(
     dtype = mu_q.dtype
 
     # =========================================================================
+    # RoPE: Apply position-dependent SO(2)^{K/2} rotations to belief means
+    # This makes KL(q_i || Ω_ij[q_j]) sensitive to relative position (j-i).
+    # Applied ONLY to attention scores, NOT to message aggregation values.
+    # =========================================================================
+    if use_rope:
+        mu_q = _apply_rope(mu_q, base=rope_base)
+
+    # =========================================================================
     # Compute all pairwise KL divergences: KL(q_i || Ω_ij[q_j])
     # Helper functions return KL tensors (not in-place) to preserve autograd graph
     # =========================================================================
@@ -337,7 +409,14 @@ def compute_attention_weights(
     # MEMORY-EFFICIENT PATHS (NEW!)
     # Priority: block-diagonal > chunked > diagonal > full
     # =========================================================================
-    if irrep_dims is not None and not diagonal_covariance:
+    if irrep_dims is not None and diagonal_covariance:
+        # BLOCK-DIAGONAL + DIAGONAL MODE: Best of both worlds!
+        # Block processing for small Omega + diagonal KL formulas (no inv/Cholesky)
+        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
+            mu_q, sigma_q, phi, generators, irrep_dims,
+            enforce_orthogonal=enforce_orthogonal
+        )
+    elif irrep_dims is not None and not diagonal_covariance:
         # BLOCK-DIAGONAL MODE: Principled + memory-efficient!
         # Uses O(N² × Σᵢdᵢ²) instead of O(N² × K²) - massive savings!
         if chunk_size is not None:
@@ -433,10 +512,14 @@ def compute_attention_weights(
     # Softmax over keys (dimension 2)
     beta = F.softmax(logits, dim=-1)  # (B, N, N)
 
-    # Re-normalize after clamping to preserve sum(beta) = 1
-    # (clamping alone breaks row-sum normalization)
-    beta = beta.clamp(min=epsilon)
-    beta = beta / beta.sum(dim=-1, keepdim=True)
+    # Clamp only non-masked positions to epsilon for numerical stability,
+    # preserving exact zeros from -inf masked positions (e.g. causal mask)
+    masked_positions = (logits == float('-inf'))
+    # Apply clamp only where positions are NOT masked, keeping masked positions at 0
+    beta = torch.where(masked_positions, beta, beta.clamp(min=epsilon))
+    # Re-normalize (guard against all-masked rows producing zero sums)
+    beta_sum = beta.sum(dim=-1, keepdim=True).clamp(min=epsilon)
+    beta = beta / beta_sum
 
     if return_kl:
         return beta, kl_matrix
@@ -495,7 +578,12 @@ def compute_kl_matrix(
     # Helper functions return KL tensors (not in-place) to preserve autograd graph
     is_cuda = device.type == 'cuda'
 
-    if irrep_dims is not None and not diagonal_covariance:
+    if irrep_dims is not None and diagonal_covariance:
+        kl_matrix = _compute_kl_matrix_block_diagonal_diag(
+            mu_q, sigma_q, phi, generators, irrep_dims,
+            enforce_orthogonal=enforce_orthogonal
+        )
+    elif irrep_dims is not None and not diagonal_covariance:
         if chunk_size is not None:
             kl_matrix = _compute_kl_matrix_block_diagonal_chunked(
                 mu_q, sigma_q, phi, generators, irrep_dims, chunk_size
@@ -683,6 +771,16 @@ def _compute_kl_matrix_torch(
     # Start jitter at 1e-4 (not eps=1e-8): transported covariances accumulate
     # numerical error from Ω @ Σ @ Ωᵀ and need stronger regularization,
     # especially when sigma embeddings are untrained (alpha=beta=0 in M-step).
+    # NaN guard: replace any NaN entries with identity covariance.
+    # NaNs propagate from matrix_exp overflow when phi grows very large.
+    nan_mask = torch.isnan(Sigma_transported).any(dim=-1).any(dim=-1)  # (B, N, N)
+    if nan_mask.any():
+        Sigma_transported = torch.where(
+            nan_mask.unsqueeze(-1).unsqueeze(-1),
+            I.expand_as(Sigma_transported),
+            Sigma_transported,
+        )
+
     cholesky_success = False
     jitter = max(eps, 1e-4)
     for _attempt in range(4):
@@ -712,13 +810,34 @@ def _compute_kl_matrix_torch(
 
             # Log determinant terms
             logdet_p = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
+                torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
             )
-            # L_q Cholesky can also fail if sigma embeddings produce non-PD
-            # query covariances. Catch and fall through to eigenvalue path.
-            L_q = torch.linalg.cholesky(Sigma_i_reg)
+            # Cholesky of Sigma_i (query covariance) with progressive fallback
+            try:
+                L_q = torch.linalg.cholesky(Sigma_i_reg)
+            except RuntimeError:
+                reg = eps
+                for attempt in range(5):
+                    reg *= 10.0
+                    Sigma_i_fallback = Sigma_i + reg * I
+                    Sigma_i_fallback = 0.5 * (Sigma_i_fallback + Sigma_i_fallback.transpose(-1, -2))
+                    try:
+                        L_q = torch.linalg.cholesky(Sigma_i_fallback)
+                        warnings.warn(
+                            f"[attention/_compute_kl_matrix] Cholesky(Sigma_i) recovered "
+                            f"at attempt {attempt+1} with reg={reg:.1e}"
+                        )
+                        break
+                    except RuntimeError:
+                        continue
+                else:
+                    warnings.warn(
+                        "[attention/_compute_kl_matrix] Cholesky(Sigma_i) FAILED "
+                        "after 5 attempts, falling back to identity"
+                    )
+                    L_q = torch.linalg.cholesky(I.expand_as(Sigma_i_reg) + eps * I)
             logdet_q = 2.0 * torch.sum(
-                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=eps)), dim=-1
+                torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1).clamp(min=1e-12)), dim=-1
             )
             logdet_term = logdet_p - logdet_q  # (B, N, N)
 
@@ -729,6 +848,16 @@ def _compute_kl_matrix_torch(
             if n_clamped > 0:
                 san.record('kl_clamp', count=n_clamped, value=float(kl_all.max().item()))
             kl_all = torch.clamp(kl_all, min=0.0, max=kl_ceil)
+
+            # NaN/Inf safety: replace any residual numerical failures with zero KL
+            bad_mask = torch.isnan(kl_all) | torch.isinf(kl_all)
+            if bad_mask.any():
+                bad_count = bad_mask.sum().item()
+                warnings.warn(
+                    f"[attention/_compute_kl_matrix] {bad_count} NaN/Inf in KL output, "
+                    f"replacing with safe values"
+                )
+            kl_all = kl_all.nan_to_num(nan=0.0, posinf=kl_ceil, neginf=0.0)
 
             return kl_all
         except RuntimeError:
@@ -864,19 +993,19 @@ def _kl_gaussian_torch(
     if cholesky_success:
         san.record('cholesky_jitter', value=jitter)
         # Log determinants: log|Σ| = 2*sum(log(diag(L)))
-        logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1).clamp(min=eps)))
-        logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2).clamp(min=eps)))
+        logdet1 = 2.0 * torch.sum(torch.log(torch.diag(L1).clamp(min=1e-12)))
+        logdet2 = 2.0 * torch.sum(torch.log(torch.diag(L2).clamp(min=1e-12)))
 
         # Trace term: tr(Σ2^{-1} Σ1)
         Y = torch.linalg.solve_triangular(L2, sigma1_reg, upper=False)
         Z = torch.linalg.solve_triangular(L2.T, Y, upper=True)
         trace_term = torch.trace(Z)
 
-        # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1)
+        # Quadratic term: (μ2-μ1)^T Σ2^{-1} (μ2-μ1) = ||L2^{-1} (μ2-μ1)||^2
         delta_mu = mu2 - mu1
+        # solve_triangular needs 2D input - reshape (K,) → (K, 1)
         y = torch.linalg.solve_triangular(L2, delta_mu.unsqueeze(-1), upper=False).squeeze(-1)
-        z = torch.linalg.solve_triangular(L2.T, y.unsqueeze(-1), upper=True).squeeze(-1)
-        quad_term = torch.dot(delta_mu, z)
+        quad_term = torch.dot(y, y)
     else:
         # Eigenvalue fallback for non-SPD matrices
         san.record('cholesky_fallback')
@@ -952,6 +1081,12 @@ def _compute_kl_matrix_diagonal(
     else:
         # Compute transport operators
         phi_matrix = torch.einsum('bna,aij->bnij', phi, generators)  # (B, N, K, K)
+
+        # Clamp phi_matrix norm to prevent matrix_exp overflow -> NaN
+        phi_norm = phi_matrix.norm(dim=(-2, -1), keepdim=True).clamp(min=1e-8)
+        max_norm = 10.0
+        scale = (max_norm / phi_norm).clamp(max=1.0)
+        phi_matrix = phi_matrix * scale
 
         exp_phi, exp_neg_phi = stable_matrix_exp_pair(phi_matrix)
 
@@ -1402,6 +1537,86 @@ def estimate_chunk_size(
 # Memory: O(N² × Σᵢ dᵢ²) instead of O(N² × K²)
 # For K=255 with 75×ℓ₀ + 30×ℓ₁ + 18×ℓ₂: 795 vs 65025 = 82× savings!
 # =============================================================================
+
+def _compute_kl_matrix_block_diagonal_diag(
+    mu_q: torch.Tensor,             # (B, N, K) belief means
+    sigma_q: torch.Tensor,          # (B, N, K) diagonal variances
+    phi: torch.Tensor,              # (B, N, n_gen) gauge frames
+    generators: torch.Tensor,       # (n_gen, K, K) block-diagonal generators
+    irrep_dims: List[int],          # [d₁, d₂, ...] dimensions of each irrep block
+    enforce_orthogonal: bool = False,
+) -> torch.Tensor:
+    """
+    Block-diagonal KL for diagonal covariance mode.
+
+    Processes each irrep block separately with small d×d Omega tensors
+    instead of one giant K×K Omega. Uses diagonal KL formulas within
+    each block (no Cholesky/inv needed).
+
+    Memory: O(N² × max(dᵢ²)) instead of O(N² × K²)
+    """
+    # Squeeze trailing singleton dimensions for robustness
+    while sigma_q.dim() > 3 and sigma_q.shape[-1] == 1:
+        sigma_q = sigma_q.squeeze(-1)
+
+    B, N, K = mu_q.shape
+    device = mu_q.device
+    dtype = mu_q.dtype
+    eps = 1e-6
+
+    assert sum(irrep_dims) == K, f"irrep_dims sum {sum(irrep_dims)} != K={K}"
+
+    sigma_q = sigma_q.clamp(min=eps)
+    kl_total = torch.zeros(B, N, N, device=device, dtype=dtype)
+
+    block_start = 0
+    for d in irrep_dims:
+        block_end = block_start + d
+
+        mu_block = mu_q[:, :, block_start:block_end].contiguous()        # (B, N, d)
+        sigma_block = sigma_q[:, :, block_start:block_end].contiguous()  # (B, N, d)
+        gen_block = generators[:, block_start:block_end, block_start:block_end].contiguous()
+
+        # Block transport operators: (B, N, N, d, d) - much smaller than (B, N, N, K, K)
+        phi_matrix_block = torch.einsum('bna,aij->bnij', phi, gen_block)
+        exp_phi_block, exp_neg_phi_block = stable_matrix_exp_pair(phi_matrix_block)
+
+        if enforce_orthogonal and d >= 16:
+            eye_d = torch.eye(d, device=device, dtype=dtype)
+            exp_phi_block = exp_phi_block @ ((3.0 * eye_d - exp_phi_block.transpose(-1, -2) @ exp_phi_block) / 2.0)
+            exp_neg_phi_block = exp_neg_phi_block @ ((3.0 * eye_d - exp_neg_phi_block.transpose(-1, -2) @ exp_neg_phi_block) / 2.0)
+
+        Omega_block = torch.einsum('bikl,bjlm->bijkm', exp_phi_block, exp_neg_phi_block)
+        del phi_matrix_block, exp_phi_block, exp_neg_phi_block
+
+        # Transport means
+        mu_transported = torch.einsum('bijkl,bjl->bijk', Omega_block, mu_block)
+
+        # Diagonal covariance transport: σ_t[k] = Σ_l Ω_kl² * σ[l]
+        sigma_j_transported = torch.einsum(
+            'bijkl,bijkl,bjl->bijk', Omega_block, Omega_block, sigma_block
+        ).clamp(min=eps)
+
+        del Omega_block
+
+        # Diagonal KL for this block
+        sigma_i = sigma_block[:, :, None, :].expand(-1, -1, N, -1)
+        mu_i = mu_block[:, :, None, :].expand(-1, -1, N, -1)
+        delta_mu = mu_transported - mu_i
+
+        trace_term = (sigma_i / sigma_j_transported).sum(dim=-1)
+        mahal_term = (delta_mu ** 2 / sigma_j_transported).sum(dim=-1)
+        logdet_term = (torch.log(sigma_j_transported) - torch.log(sigma_i)).sum(dim=-1)
+
+        kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
+        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_total = kl_total + kl_block
+
+        del sigma_j_transported, mu_transported
+        block_start = block_end
+
+    return kl_total
+
 
 def _compute_kl_matrix_block_diagonal(
     mu_q: torch.Tensor,             # (B, N, K) belief means
@@ -1986,6 +2201,8 @@ class IrrepMultiHeadAttention(nn.Module):
         per_head_kappa: bool = False,  # If True, learn separate κ_h per head
         use_output_projection: bool = False,  # If True, add W_O linear projection after heads
         irrep_dims_override: Optional[List[int]] = None,  # Override block dims (for cross-head coupling)
+        use_rope: bool = False,  # If True, apply RoPE rotations to μ before KL computation
+        rope_base: float = 10000.0,  # RoPE frequency base
     ):
         """
         Initialize irrep-structured multi-head attention.
@@ -2026,6 +2243,8 @@ class IrrepMultiHeadAttention(nn.Module):
         self.use_identity_transport = use_identity_transport
         self.mask_self_attention = mask_self_attention
         self.enforce_orthogonal = enforce_orthogonal
+        self.use_rope = use_rope
+        self.rope_base = rope_base
 
         # Build irrep block structure
         self.irrep_dims = []
@@ -2320,6 +2539,8 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
+                    use_rope=self.use_rope,
+                    rope_base=self.rope_base,
                 )  # (B, N, N), (B, N, N)
                 all_attention_weights.append(beta_head)
                 all_kl_matrices.append(kl_head)
@@ -2340,6 +2561,8 @@ class IrrepMultiHeadAttention(nn.Module):
                     use_identity_transport=self.use_identity_transport,
                     mask_self_attention=self.mask_self_attention,
                     enforce_orthogonal=self.enforce_orthogonal,
+                    use_rope=self.use_rope,
+                    rope_base=self.rope_base,
                 )  # (B, N, N)
                 kl_head = None  # Not computed
 
