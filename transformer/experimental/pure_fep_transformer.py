@@ -348,7 +348,14 @@ class PureFEPConfig:
     # This allows priors to form consistent world model across positions
     # CRITICAL: Must be True for dφ/dt! (∂F/∂φ includes prior coupling term)
     prior_coupling_enabled: bool = True  # Was False - MUST be True for gauge evolution!
-    lambda_prior: float = 0.1            # Weight for prior-prior coupling
+    lambda_prior: float = 0.1            # Weight for model coupling γ_ij·KL(s_i||Ω_ij·s_j)
+
+    # Hyper-prior: KL(s_i || h) regularizes position models toward shared centroid.
+    # h = mean of all position models (the "typical" model).
+    # This prevents position models from memorizing per-position training statistics.
+    # In the FEP framework: models (s) are coupled via γ_ij and regularized by h.
+    # The prior (p) is what beliefs are measured against; the model (s) generates it.
+    lambda_hyperprior: float = 0.1       # Weight for hyper-prior KL(s||h)
 
     # Gradient-based prior updates: use VFE gradient to update priors
     # Instead of simple EMA, update priors via: p ← p - η_p · ∂F/∂p
@@ -941,13 +948,37 @@ class PureFEPLayer(nn.Module):
             ce_loss = torch.tensor(0.0, device=device)
 
         # ==================================================================
-        # FULL VFE = KL terms + observation term
+        # HYPER-PRIOR: KL(s_i || h) — regularizes position models
+        # ==================================================================
+        # In the FEP framework, position-dependent parameters (prior_mu/sigma)
+        # are the generative MODELS s_i. The model coupling γ_ij·KL(s_i||Ω_ij·s_j)
+        # ensures gauge coherence. The hyper-prior KL(s_i||h) prevents memorization
+        # by pulling all position models toward a shared centroid h.
+        #
+        # h_mu = mean of s_i across positions (the "typical" model)
+        # Detached so each s_i is pulled independently toward the centroid.
+        h_mu = mu_p.mean(dim=1, keepdim=True).detach()  # (B, 1, K)
+        h_sigma = sigma_p.mean(dim=1, keepdim=True).detach().clamp(min=variance_floor)
+        # Broaden hyper-prior variance (2x) to allow model diversity
+        h_sigma_broad = h_sigma * 2.0
+
+        hyperprior_kl = 0.5 * (
+            sigma_p_safe / h_sigma_broad
+            + (mu_p - h_mu)**2 / h_sigma_broad
+            - 1.0
+            + torch.log(h_sigma_broad / sigma_p_safe)
+        ).sum(dim=-1).mean()
+
+        # ==================================================================
+        # FULL VFE = KL terms + observation + hyper-prior
         # ==================================================================
         lambda_obs = getattr(self.config, 'lambda_obs', 1.0)
+        lambda_h = getattr(self.config, 'lambda_hyperprior', 0.1)
         vfe_loss = (self.config.alpha * kl_self +
                    self.config.lambda_belief * alignment +
                    prior_coupling +
-                   lambda_obs * ce_loss)  # Observations IN the VFE!
+                   lambda_obs * ce_loss +
+                   lambda_h * hyperprior_kl)
 
         # ==================================================================
         # 3. Compute gradients (analytical mode for pure FEP)
@@ -1118,15 +1149,19 @@ class PureFEPLayer(nn.Module):
         # kl_self, alignment, prior_coupling were already computed above
         # No need to recompute - just detach for metrics
         prior_coupling_val = prior_coupling.detach().item() if isinstance(prior_coupling, torch.Tensor) else 0.0
+        hyperprior_val = hyperprior_kl.detach().item() if isinstance(hyperprior_kl, torch.Tensor) else 0.0
+        ce_loss_val = ce_loss.detach().item() if isinstance(ce_loss, torch.Tensor) else ce_loss
         metrics = {
             'vfe_total': (self.config.alpha * kl_self.detach() +
                          self.config.lambda_belief * alignment.detach() +
                          prior_coupling_val +
-                         ce_loss.detach()).item(),
+                         ce_loss_val +
+                         lambda_h * hyperprior_val),
             'kl_self': kl_self.detach().item(),
             'alignment': alignment.detach().item(),
-            'prior_coupling': prior_coupling_val,
-            'ce_loss': ce_loss.detach().item() if isinstance(ce_loss, torch.Tensor) else ce_loss,
+            'model_coupling': prior_coupling_val,
+            'hyperprior_kl': hyperprior_val,
+            'ce_loss': ce_loss_val,
             'grad_norm_mu': grad_norm.item(),
             'grad_norm_sigma': sigma_grad_norm.item(),
         }
@@ -1643,9 +1678,13 @@ class PureFEPLayer(nn.Module):
             lr_scale = torch.ones(N_prior, device=mu_q_batch.device)
 
         # =====================================================================
-        # Apply update to persistent priors
+        # Apply update to persistent models (position-dependent generative models)
         # =====================================================================
-        base_blend = self.config.prior_lr
+        # Warmup: prevent aggressive early updates that memorize training data.
+        # Early in training, model updates are near-zero; they ramp up over time.
+        warmup_steps = 100
+        warmup_factor = min(1.0, self.total_prior_updates / max(warmup_steps, 1))
+        base_blend = self.config.prior_lr * warmup_factor
 
         if self.config.gradient_prior_updates:
             # GRADIENT-BASED PRIOR UPDATE
@@ -1681,8 +1720,17 @@ class PureFEPLayer(nn.Module):
             else:
                 grad_tower = torch.zeros_like(grad_self)
 
+            # Term 4: Hyper-prior gradient ∂/∂s [λ_h · KL(s || h)]
+            # h = centroid of all position models. Pulls each model toward
+            # the shared mean, preventing memorization of per-position statistics.
+            lambda_h = getattr(self.config, 'lambda_hyperprior', 0.1)
+            h_mu = self.prior_mu[:N_prior, :].mean(dim=0, keepdim=True)  # (1, K) centroid
+            h_sigma = self.prior_sigma[:N_prior, :].mean(dim=0, keepdim=True).clamp(min=1e-4)
+            # ∂KL(s||h)/∂s = (s - h) / σ_h, with broadened σ_h
+            grad_hyperprior = lambda_h * (self.prior_mu[:N_prior, :] - h_mu) / (h_sigma * 2.0)
+
             # Total gradient
-            grad_mu_p = self.config.alpha * grad_self + grad_align + grad_tower
+            grad_mu_p = self.config.alpha * grad_self + grad_align + grad_tower + grad_hyperprior
 
             # Clip gradient to prevent explosion
             grad_norm = grad_mu_p.norm()
@@ -1705,6 +1753,14 @@ class PureFEPLayer(nn.Module):
             )
             # Sigma uses base blend (uncertainty shouldn't scale with error)
             self.prior_sigma[:N_prior, :].lerp_(sigma_p_new, base_blend)
+
+            # Hyper-prior regularization: pull models toward centroid
+            # This is the EMA-path equivalent of the hyper-prior gradient.
+            # Prevents position models from drifting to memorize training data.
+            lambda_h = getattr(self.config, 'lambda_hyperprior', 0.1)
+            h_mu = self.prior_mu[:N_prior, :].mean(dim=0, keepdim=True)  # (1, K)
+            reg_strength = base_blend * lambda_h
+            self.prior_mu[:N_prior, :] -= reg_strength * (self.prior_mu[:N_prior, :] - h_mu)
 
         # Track update statistics
         self.prior_update_count[:N_prior] += 1
@@ -1796,17 +1852,35 @@ class PureFEPLayer(nn.Module):
         # ==================================================================
         # CRITICAL: φ is a learned parameter that evolves via VFE gradients!
         # After VFE steps, update the persistent self.phi (per-position)
-        if self.config.gauge_evolution_enabled and phi.grad is not None:
-            with torch.no_grad():
-                # Average gradient across batch (positions have shared φ)
+        if self.config.gauge_evolution_enabled:
+            # Compute gauge frame gradients for evolution: dφ/dt = -∂F/∂φ
+            # In pure FEP mode, phi.grad is NOT populated by autograd (analytical
+            # gradients are used for beliefs only). We must compute ∂F/∂φ explicitly
+            # via a small autograd computation on the alignment term.
+            if phi.grad is not None:
                 grad_phi_batch = phi.grad.mean(dim=0)  # (N, phi_dim)
+            else:
+                # Explicit gradient computation for phi
+                # The alignment term β_ij·KL(q_i||Ω_ij·q_j) depends on φ through
+                # the transport operators Ω_ij = exp(φ_i·G)·exp(-φ_j·G)
+                with torch.enable_grad():
+                    phi_for_grad = phi.detach().requires_grad_(True)
+                    beta_g, kl_g = compute_attention_weights(
+                        mu_q.detach(), sigma_q.detach(), phi_for_grad, self.generators,
+                        kappa=self.config.kappa, mask=mask, return_kl=True,
+                        diagonal_covariance=True,
+                    )
+                    alignment_for_phi = (beta_g * kl_g).sum(dim=-1).mean()
+                    grad_phi_batch = torch.autograd.grad(
+                        self.config.lambda_belief * alignment_for_phi,
+                        phi_for_grad,
+                    )[0].mean(dim=0)  # Average across batch -> (N, phi_dim)
 
-                # Update persistent phi: dφ/dt = -∂F/∂φ
+            with torch.no_grad():
                 N_phi = min(N, self.phi.shape[0])
                 self.phi.data[:N_phi] -= self.config.gauge_lr * grad_phi_batch[:N_phi]
 
-                # Normalize to prevent explosion (optional)
-                # Max norm prevents φ from growing unbounded
+                # Normalize to prevent explosion
                 if hasattr(self.config, 'phi_max_norm') and self.config.phi_max_norm > 0:
                     phi_norm = self.phi.data.norm(dim=-1, keepdim=True).clamp(min=1e-8)
                     scale = torch.clamp(self.config.phi_max_norm / phi_norm, max=1.0)
@@ -2580,6 +2654,25 @@ class PureFEPTransformer(nn.Module):
                             (1 - base_blend) * self.prior_bank.prior_mu.data[mask] +
                             base_blend * avg_beliefs[mask]
                         )
+
+                # =============================================================
+                # DIVERSITY REGULARIZATION: prevent token prior collapse
+                # =============================================================
+                # Without this, token priors converge to the same mean embedding,
+                # losing discriminative power. Push priors of different tokens
+                # apart by repelling each prior from the batch centroid.
+                # This is the token-level analogue of the position hyper-prior:
+                # it ensures token models SPREAD OUT in embedding space.
+                with torch.no_grad():
+                    unique_tokens = torch.unique(targets)
+                    if len(unique_tokens) > 1:
+                        batch_priors = self.prior_bank.prior_mu.data[unique_tokens]  # (n, K)
+                        centroid = batch_priors.mean(dim=0)  # (K,)
+                        # Repulsion: push each token prior away from centroid
+                        repulsion = batch_priors - centroid  # (n, K)
+                        # Scale repulsion by prior_lr (small, stabilizing force)
+                        repulsion_lr = self.config.prior_lr * 0.1
+                        self.prior_bank.prior_mu.data[unique_tokens] += repulsion_lr * repulsion
 
     # =========================================================================
     # DYNAMIC LAYER EMERGENCE: Spawn/merge layers based on VFE pressure
