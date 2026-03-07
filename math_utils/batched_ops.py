@@ -61,7 +61,11 @@ def batched_cholesky_inverse(L: torch.Tensor) -> torch.Tensor:
     Returns:
         Sigma^{-1}, shape (..., K, K)
     """
-    return torch.cholesky_inverse(L)
+    K = L.shape[-1]
+    eye = torch.eye(K, device=L.device, dtype=L.dtype)
+    # Solve L @ Y = I, then L^T @ Z = Y => Z = (L L^T)^{-1} = Sigma^{-1}
+    Y = torch.linalg.solve_triangular(L, eye.expand_as(L), upper=False)
+    return torch.linalg.solve_triangular(L.transpose(-1, -2), Y, upper=True)
 
 
 def batched_logdet_from_cholesky(L: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -181,9 +185,10 @@ def batched_kl_divergence(
     logdet_q = batched_logdet_from_cholesky(L_q, eps)
     logdet_p = batched_logdet_from_cholesky(L_p, eps)
 
-    # Trace term
-    Sigma_p_inv = torch.cholesky_inverse(L_p)
-    trace = torch.sum(Sigma_p_inv * Sigma_q_reg, dim=(-2, -1))
+    # Trace term via solve instead of explicit inverse
+    Y = torch.linalg.solve_triangular(L_p, Sigma_q_reg, upper=False)
+    Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+    trace = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
     # Quadratic term
     delta = mu_p - mu_q

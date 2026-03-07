@@ -68,10 +68,10 @@ import numpy as np
 
 # This MUST be set BEFORE importing CuPy to avoid the libiomp5md.dll conflict
 
-# Set this unconditionally to prevent the fatal abort
-
- 
-
+# WORKAROUND: Prevents fatal abort from duplicate OpenMP libraries (e.g., when
+# both numpy/scipy and PyTorch ship their own libiomp5). This can mask real
+# threading issues — if you have a properly configured MKL/OpenMP environment,
+# consider removing this line and fixing the root cause instead.
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 
  

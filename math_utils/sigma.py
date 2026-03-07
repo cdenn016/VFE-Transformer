@@ -325,7 +325,10 @@ def covariance_to_cholesky(Sigma: np.ndarray, eps: float = 1e-6) -> np.ndarray:
         L: Lower-triangular Cholesky factor, shape (*S, K, K)
     """
     # Regularize for stability
-    Sigma = Sigma + eps * np.eye(Sigma.shape[-1])
+    K = Sigma.shape[-1]
+    # Reshape identity for correct broadcasting with batched input (*S, K, K)
+    eye = np.eye(K).reshape((1,) * (Sigma.ndim - 2) + (K, K))
+    Sigma = Sigma + eps * eye
     
     # Compute Cholesky
     try:

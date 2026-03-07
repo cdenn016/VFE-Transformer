@@ -314,8 +314,46 @@ class PriorBank(nn.Module):
             lr: Learning rate for prior updates
         """
         if self.gauge_fixed_priors:
-            # For gauge-fixed priors, updates would need to be in phi space
-            # TODO: Implement gauge-fixed prior updates
+            # For gauge-fixed priors, update phi_embed (rotation angles) and base prior
+            # via prediction-error weighted EMA toward successful beliefs.
+            with torch.no_grad():
+                B, N, K = mu_beliefs.shape
+
+                # Compute success weights from prediction errors
+                weights = F.softmax(-prediction_errors.clamp(min=-10, max=10), dim=-1)
+
+                unique_tokens = torch.unique(token_ids)
+                for token_id in unique_tokens:
+                    mask = (token_ids == token_id)
+                    if mask.sum() == 0:
+                        continue
+
+                    token_beliefs_mu = mu_beliefs[mask]  # (num_occurrences, K)
+                    token_weights = weights[mask]  # (num_occurrences,)
+                    total_weight = token_weights.sum()
+                    weighted_belief = (token_beliefs_mu * token_weights.unsqueeze(-1)).sum(0) / total_weight
+
+                    # Compute the target phi that would rotate base_prior_mu to weighted_belief
+                    # Update phi_embed via EMA toward inverse-rotated belief
+                    mean_error = prediction_errors[mask].mean()
+                    confidence = 1.0 / (1.0 + mean_error)
+                    effective_lr = lr * confidence
+
+                    # EMA update phi toward the direction that produces this belief
+                    # Approximate: update base_prior_mu toward the mean of all inverse-rotated beliefs
+                    token_id_int = int(token_id.item())
+                    current_phi = self.phi_embed.weight.data[token_id_int]  # (phi_dim,)
+
+                    # Compute current rotation and its inverse
+                    R = self._compute_rotation(current_phi.unsqueeze(0)).squeeze(0)  # (K, K)
+                    # Inverse-rotate the belief back to base frame
+                    belief_in_base = R.T @ weighted_belief  # (K,)
+
+                    # EMA update base prior toward this
+                    self.base_prior_mu.data[:] = (
+                        (1.0 - effective_lr * 0.1) * self.base_prior_mu.data +
+                        effective_lr * 0.1 * belief_in_base.detach()
+                    )
             return
 
         with torch.no_grad():

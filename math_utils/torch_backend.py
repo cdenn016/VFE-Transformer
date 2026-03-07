@@ -187,10 +187,11 @@ class TorchBackend:
         logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1)), dim=-1)
         logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1)), dim=-1)
 
-        # Trace term: tr(Σ_p^{-1} Σ_q)
-        # Solve L_p @ X = Σ_q for X, then tr(L_p^{-T} @ X) = tr(Σ_p^{-1} @ Σ_q)
-        Sigma_p_inv = torch.cholesky_inverse(L_p)
-        trace_term = torch.sum(Sigma_p_inv * Sigma_q_reg, dim=(-2, -1))
+        # Trace term: tr(Σ_p^{-1} Σ_q) via solve instead of explicit inverse
+        # Solve L_p @ Y = Σ_q for Y, then solve L_p^T @ Z = Y for Z, tr(Z) = tr(Σ_p^{-1} Σ_q)
+        Y = torch.linalg.solve_triangular(L_p, Sigma_q_reg, upper=False)
+        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
         # Quadratic term: (μ_p - μ_q)^T Σ_p^{-1} (μ_p - μ_q)
         delta = mu_p - mu_q
@@ -260,9 +261,10 @@ class TorchBackend:
         logdet_p = 2.0 * torch.sum(torch.log(torch.diagonal(L_p, dim1=-2, dim2=-1)), dim=-1)
         logdet_q = 2.0 * torch.sum(torch.log(torch.diagonal(L_q, dim1=-2, dim2=-1)), dim=-1)
 
-        # Batched trace term
-        Sigma_p_inv = torch.cholesky_inverse(L_p)
-        trace_term = torch.sum(Sigma_p_inv * Sigma_q_reg, dim=(-2, -1))
+        # Batched trace term via solve instead of explicit inverse
+        Y = torch.linalg.solve_triangular(L_p, Sigma_q_reg, upper=False)
+        Z = torch.linalg.solve_triangular(L_p.transpose(-1, -2), Y, upper=True)
+        trace_term = torch.diagonal(Z, dim1=-2, dim2=-1).sum(dim=-1)
 
         # Batched quadratic term
         delta = mu_p_batch - mu_q_batch

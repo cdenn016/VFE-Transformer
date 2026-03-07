@@ -1329,8 +1329,14 @@ def _compute_kl_matrix_chunked(
                     fallback_vals.append(torch.stack(batch_vals, dim=0))  # (n_i, n_j)
                 col_chunks_list.append(torch.stack(fallback_vals, dim=0))  # (B, n_i, n_j)
 
-            # Explicit cleanup
+            # Explicit cleanup of large intermediate tensors
             del Sigma_transported, mu_transported
+            if 'L_p' in dir():
+                del L_p
+            if 'Y' in dir():
+                del Y
+            if 'Z' in dir():
+                del Z
 
         # Assemble row from column chunks: (B, n_i, N)
         row_chunks_list.append(torch.cat(col_chunks_list, dim=2))
@@ -1600,8 +1606,8 @@ def _compute_kl_matrix_block_diagonal_diag(
         del Omega_block
 
         # Diagonal KL for this block
-        sigma_i = sigma_block[:, :, None, :].expand(-1, -1, N, -1)
-        mu_i = mu_block[:, :, None, :].expand(-1, -1, N, -1)
+        sigma_i = sigma_block[:, :, None, :].expand(-1, -1, N, -1).clone()
+        mu_i = mu_block[:, :, None, :].expand(-1, -1, N, -1).clone()
         delta_mu = mu_transported - mu_i
 
         trace_term = (sigma_i / sigma_j_transported).sum(dim=-1)
@@ -1609,7 +1615,7 @@ def _compute_kl_matrix_block_diagonal_diag(
         logdet_term = (torch.log(sigma_j_transported) - torch.log(sigma_i)).sum(dim=-1)
 
         kl_block = 0.5 * (trace_term + mahal_term - d + logdet_term)
-        kl_block = kl_block.clamp(min=0.0, max=max(100.0, 5.0 * K))
+        kl_block = kl_block.clamp(min=0.0, max=100.0)
         kl_total = kl_total + kl_block
 
         del sigma_j_transported, mu_transported
@@ -1718,7 +1724,8 @@ def _compute_kl_matrix_block_diagonal(
 
         # Try Cholesky with escalating jitter before falling back to diagonal approx
         cholesky_succeeded = False
-        for jitter in [0.0, 1e-6, 1e-5, 1e-4, 1e-3]:
+        jitter = 1e-4
+        for _attempt in range(4):
             try:
                 jittered_transported = sigma_block_transported_reg + jitter * I_block
                 jittered_i = sigma_block_i_reg + jitter * I_block
@@ -1748,7 +1755,6 @@ def _compute_kl_matrix_block_diagonal(
 
                 # KL for this block
                 kl_block = 0.5 * (trace_term + mahal_term - d + logdet_p - logdet_q)
-                # Clamp KL to [0, 100] for numerical stability
                 kl_block = torch.clamp(kl_block, min=0.0, max=100.0)
 
                 # ACCUMULATE to total KL (additive decomposition)
@@ -1758,7 +1764,7 @@ def _compute_kl_matrix_block_diagonal(
                 san.record('cholesky_jitter', value=jitter)
                 break
             except RuntimeError:
-                continue
+                jitter *= 10.0  # escalate: 1e-4 -> 1e-3 -> 1e-2 -> 1e-1
 
         if not cholesky_succeeded:
             san.record('cholesky_fallback')
@@ -1903,7 +1909,8 @@ def _compute_kl_matrix_block_diagonal_chunked(
 
                 # Try Cholesky with escalating jitter before falling back
                 cholesky_succeeded = False
-                for jitter in [0.0, 1e-6, 1e-5, 1e-4, 1e-3]:
+                jitter = 1e-4
+                for _attempt in range(4):
                     try:
                         jittered_transported = sigma_transported_reg + jitter * I_d
                         jittered_i = sigma_i_reg + jitter * I_d
@@ -1938,7 +1945,7 @@ def _compute_kl_matrix_block_diagonal_chunked(
                         san.record('cholesky_jitter', value=jitter)
                         break
                     except RuntimeError:
-                        continue
+                        jitter *= 10.0  # escalate: 1e-4 -> 1e-3 -> 1e-2 -> 1e-1
 
                 if not cholesky_succeeded:
                     san.record('cholesky_fallback')

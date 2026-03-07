@@ -266,38 +266,34 @@ if CUPY_AVAILABLE:
         n_total = int(np.prod(batch_shape))
         phi_flat = phi.reshape(n_total, 3)
 
-        # Compute theta
-        theta = cp.linalg.norm(phi_flat, axis=-1)
+        # Compute theta (vectorized)
+        theta = cp.linalg.norm(phi_flat, axis=-1)  # (n_total,)
 
-        # Allocate output
-        R = cp.zeros((n_total, 3, 3), dtype=phi.dtype)
+        # Build skew-symmetric matrices [phi]_x for all elements (vectorized)
+        phi_x = cp.zeros((n_total, 3, 3), dtype=phi.dtype)
+        phi_x[:, 0, 1] = -phi_flat[:, 2]
+        phi_x[:, 0, 2] = phi_flat[:, 1]
+        phi_x[:, 1, 0] = phi_flat[:, 2]
+        phi_x[:, 1, 2] = -phi_flat[:, 0]
+        phi_x[:, 2, 0] = -phi_flat[:, 1]
+        phi_x[:, 2, 1] = phi_flat[:, 0]
 
-        # Identity matrix
-        I = cp.eye(3, dtype=phi.dtype)
+        # phi_x² for all elements
+        phi_x_sq = phi_x @ phi_x  # (n_total, 3, 3)
 
-        for idx in range(n_total):
-            th = theta[idx]
-            p = phi_flat[idx]
+        # Identity matrix broadcast
+        I = cp.eye(3, dtype=phi.dtype)[cp.newaxis, :, :]  # (1, 3, 3)
 
-            # Skew symmetric matrix [phi]_x
-            phi_x = cp.zeros((3, 3), dtype=phi.dtype)
-            phi_x[0, 1] = -p[2]
-            phi_x[0, 2] = p[1]
-            phi_x[1, 0] = p[2]
-            phi_x[1, 2] = -p[0]
-            phi_x[2, 0] = -p[1]
-            phi_x[2, 1] = p[0]
+        # Compute coefficients (vectorized, with safe division)
+        # For small theta: Taylor expansion (c1 ≈ 1, c2 ≈ 0.5)
+        small_mask = theta < eps  # (n_total,)
+        safe_theta = cp.where(small_mask, cp.ones_like(theta), theta)
 
-            phi_x_sq = phi_x @ phi_x
+        c1 = cp.where(small_mask, cp.ones_like(theta), cp.sin(safe_theta) / safe_theta)
+        c2 = cp.where(small_mask, 0.5 * cp.ones_like(theta), (1.0 - cp.cos(safe_theta)) / (safe_theta * safe_theta))
 
-            if th < eps:
-                # Taylor expansion
-                R[idx] = I + phi_x + 0.5 * phi_x_sq
-            else:
-                # Rodrigues formula
-                c1 = cp.sin(th) / th
-                c2 = (1.0 - cp.cos(th)) / (th * th)
-                R[idx] = I + c1 * phi_x + c2 * phi_x_sq
+        # Rodrigues formula (vectorized): R = I + c1 * [phi]_x + c2 * [phi]_x²
+        R = I + c1[:, cp.newaxis, cp.newaxis] * phi_x + c2[:, cp.newaxis, cp.newaxis] * phi_x_sq
 
         R = R.reshape(batch_shape + (3, 3))
 
